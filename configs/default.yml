@@ -1,0 +1,92 @@
+# configs/default.yml
+project:
+  name: "druglab_run"
+  output_dir: "output"
+
+protein_preparation:
+  remove_water: true
+  remove_heterogens: true
+  add_hydrogens: true
+  fix_missing_residues: true
+  fix_missing_atoms: true
+  ph: 7.4
+  chain_id: null            # null = use all chains
+  keep_ligands: []
+
+pocket_detection:
+  method: "geometric"       # geometric | ligand_based | manual
+  selection_mode: "best_score"  # best_score | largest_volume | ligand_guided | manual
+  min_pocket_size: 100.0    # ų
+  max_pockets: 5
+  padding: 5.0              # Å (reduced from 10.0 for realistic docking boxes)
+  max_box_dimension: 30.0   # Å — clamp any dimension exceeding this
+  warn_large_boxes: true
+  manual_center: null
+  manual_size: null
+  reference_ligand: null
+
+ligand_preparation:
+  add_hydrogens: true
+  generate_3d: true
+  num_conformers: 1
+  energy_minimize: true
+  ph: 7.4
+  max_tautomers: 1
+  convert_to_pdbqt: true
+
+druglikeness:
+  profile: "recommended"    # recommended | oral_drug | lead_like | fragment | custom
+  rules:
+    - lipinski
+  evaluation_mode: "majority"  # strict | majority | custom
+  minimum_rule_pass_fraction: 0.7
+  max_violations: 1
+  brenk_mode: "warning"     # warning | fail
+  custom_filters: null
+
+admet:
+  profile: "balanced"       # conservative | balanced | permissive
+  target_type: "auto"       # auto | general | cns | peripheral
+  filter_toxic: true
+  filter_low_absorption: true
+  thresholds: null          # null = use profile defaults from admet.py
+  models: null
+
+docking:
+  exhaustiveness: 32
+  n_poses: 10
+  energy_range: 3.0
+  seed: 42
+  n_cpus: 0                 # 0 = auto
+  score_only: false
+
+lead_selection:
+  top_n: 5
+  scoring_method: "weighted_sum"
+  weights:
+    affinity: 0.5
+    admet: 0.3
+    druglikeness: 0.2
+  affinity_cutoff: -6.0
+  diversity_filter: true
+  similarity_cutoff: 0.7
+
+optimization:
+  strategies:
+    - bioisostere
+    - scaffold_hop
+    - r_group
+  max_analogues: 100
+  similarity_range: [0.4, 0.9]
+  mw_range: [150.0, 600.0]
+  top_n: 10
+  custom_fragments: null
+
+report:
+  format: "html"
+  include_charts: true
+  include_raw_data: true
+
+logging:
+  level: "INFO"
+  verbose: false

@@ -1,0 +1,32 @@
+name: druglab
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.11
+  - biopython
+  - gemmi
+  - matplotlib
+  - numpy
+  - openbabel
+  - openmm
+  - pandas
+  - pdbfixer
+  - rdkit
+  - scikit-learn
+  - scipy
+  - seaborn
+  - vina
+  - pip
+
+  - pip:
+      - admet-ai
+      - jinja2
+      - meeko
+      - plotly
+      - pymoo
+      - rich
+      - tqdm
+
+

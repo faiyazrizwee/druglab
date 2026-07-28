@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE and OS files
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# DrugLab specific generated output directories
+output/
+result/
+reports/
+res/
+ligands/
+ligands1/
+protein/
+
+
+# Testing/temporary data folders and files
+test_lead_opt/
+test_docking.csv
+tests/
+test_interactive.py
+test_interactive2.py
+test_lead_opt.py
+test_lead_selection.py
+test_workflow.py
