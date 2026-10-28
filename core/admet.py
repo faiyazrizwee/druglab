@@ -38,6 +38,10 @@ logger = setup_logger("admet", level="INFO")
 # Try importing ADMET-AI
 _HAS_ADMET_AI = False
 try:
+    import warnings
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module=r"admet_ai.*")
+    warnings.filterwarnings("ignore", message=r".*path is deprecated.*")
+    warnings.filterwarnings("ignore", message=r".*pkg_resources is deprecated.*")
     from admet_ai import ADMETModel
     _HAS_ADMET_AI = True
     logger.debug("ADMET-AI backend available.")

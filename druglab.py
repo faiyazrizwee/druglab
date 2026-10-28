@@ -25,6 +25,12 @@ Entry point supporting three execution modes:
 import sys
 import os
 import argparse
+import warnings
+
+# Suppress known third-party deprecation warnings (e.g. admet_ai resources.path)
+warnings.filterwarnings("ignore", category=DeprecationWarning, module=r"admet_ai.*")
+warnings.filterwarnings("ignore", message=r".*path is deprecated.*")
+warnings.filterwarnings("ignore", message=r".*pkg_resources is deprecated.*")
 
 # Ensure the project root is on sys.path so relative imports work
 _PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))

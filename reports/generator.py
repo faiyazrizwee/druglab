@@ -11,6 +11,7 @@ Generates comprehensive, publication-grade HTML reports containing:
 """
 
 import os
+import re
 import json
 import base64
 import html
@@ -81,6 +82,189 @@ def _read_df_safe(path: str) -> Optional[pd.DataFrame]:
         except Exception:
             return None
     return None
+
+
+def _extract_docked_ligands_and_poses(output_dir: str, ranking_df=None, docking_df=None) -> dict[str, dict]:
+    """
+    Extract all docked ligands and all their individual poses with affinities, RMSD, and 3D coordinates.
+    Supports PDBQT pose files, multi-pose SDF files, and best pose fallbacks.
+    """
+    docked_data: dict[str, dict] = {}
+    dock_dir = os.path.join(output_dir, "docking")
+    poses_dir = os.path.join(dock_dir, "poses")
+
+    # 1. Collect metadata from ranking/docking CSVs
+    meta_by_name = {}
+    if ranking_df is not None and not ranking_df.empty:
+        for _, row in ranking_df.iterrows():
+            nm = str(row.get("name", row.get("Compound", "")))
+            if nm:
+                le_val = row.get("ligand_efficiency")
+                lle_val = row.get("lipophilic_efficiency")
+                cs_val = row.get("composite_score", row.get("FinalScore"))
+                meta_by_name[nm] = {
+                    "smiles": str(row.get("smiles", "")),
+                    "best_affinity": row.get("best_affinity", row.get("Docking")),
+                    "le": f"{float(le_val):.3f}" if pd.notnull(le_val) and isinstance(le_val, (int, float)) else None,
+                    "lle": f"{float(lle_val):.2f}" if pd.notnull(lle_val) and isinstance(lle_val, (int, float)) else None,
+                    "composite_score": f"{float(cs_val):.3f}" if pd.notnull(cs_val) and isinstance(cs_val, (int, float)) else None,
+                }
+
+    if docking_df is not None and not docking_df.empty:
+        for _, row in docking_df.iterrows():
+            nm = str(row.get("name", row.get("Compound", "")))
+            if nm and nm not in meta_by_name:
+                meta_by_name[nm] = {
+                    "smiles": str(row.get("smiles", "")),
+                    "best_affinity": row.get("best_affinity"),
+                    "le": None,
+                    "lle": None,
+                    "composite_score": None,
+                }
+
+    # 2. Check docking_report.json for affinities list
+    report_json_path = os.path.join(dock_dir, "docking_report.json")
+    affinities_by_name = {}
+    if os.path.exists(report_json_path):
+        try:
+            with open(report_json_path, "r", encoding="utf-8") as f:
+                r_data = json.load(f)
+                for item in r_data.get("docking_results", []):
+                    nm = item.get("name")
+                    if nm and "all_affinities" in item:
+                        affinities_by_name[nm] = item["all_affinities"]
+        except Exception:
+            pass
+
+    # 3. Check for PDBQT pose files in poses_dir and dock_dir
+    candidate_pdbqt_files = []
+    if os.path.isdir(poses_dir):
+        candidate_pdbqt_files.extend(list(Path(poses_dir).glob("*_poses.pdbqt")))
+        candidate_pdbqt_files.extend(list(Path(poses_dir).glob("*.pdbqt")))
+    if os.path.isdir(dock_dir):
+        candidate_pdbqt_files.extend(list(Path(dock_dir).glob("*_poses.pdbqt")))
+
+    seen_pdbqt = set()
+    for pq_path in candidate_pdbqt_files:
+        pq_str = str(pq_path)
+        if pq_str in seen_pdbqt or pq_path.name.startswith("protein") or "temp" in pq_str:
+            continue
+        seen_pdbqt.add(pq_str)
+
+        lig_name = pq_path.stem.replace("_poses", "").replace(".pdbqt", "")
+        try:
+            with open(pq_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception:
+            continue
+
+        raw_models = re.split(r"^MODEL\s+\d+", content, flags=re.MULTILINE)
+        poses = []
+        known_affs = affinities_by_name.get(lig_name, [])
+
+        for rm in raw_models:
+            if not rm.strip():
+                continue
+            aff = None
+            rmsd_lb = 0.0
+            rmsd_ub = 0.0
+            vm = re.search(r"REMARK VINA RESULT:\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)", rm)
+            if vm:
+                aff = float(vm.group(1))
+                rmsd_lb = float(vm.group(2))
+                rmsd_ub = float(vm.group(3))
+            elif len(poses) < len(known_affs):
+                aff = float(known_affs[len(poses)])
+
+            # Convert to standard clean PDB
+            pdb_lines = []
+            for line in rm.splitlines():
+                if line.startswith(("ATOM", "HETATM")):
+                    atom_name = line[12:16].strip()
+                    elem = atom_name[0] if atom_name else "C"
+                    base = line[:66].ljust(66)
+                    pdb_lines.append(f"{base}          {elem:>2}")
+                elif line.startswith("CONECT"):
+                    pdb_lines.append(line)
+            if pdb_lines:
+                poses.append({
+                    "pose_id": len(poses) + 1,
+                    "affinity": aff,
+                    "rmsd_lb": rmsd_lb,
+                    "rmsd_ub": rmsd_ub,
+                    "format": "pdb",
+                    "data": "\n".join(pdb_lines) + "\nEND\n"
+                })
+
+        if poses:
+            meta = meta_by_name.get(lig_name, {})
+            best_aff = poses[0]["affinity"] if poses[0]["affinity"] is not None else meta.get("best_affinity")
+            docked_data[lig_name] = {
+                "name": lig_name,
+                "smiles": meta.get("smiles", ""),
+                "best_affinity": float(best_aff) if best_aff is not None else -7.0,
+                "le": meta.get("le"),
+                "lle": meta.get("lle"),
+                "composite_score": meta.get("composite_score"),
+                "poses": poses
+            }
+
+    # 4. Check SDF files (docking/best_poses.sdf, lead_selection/leads.sdf, etc.)
+    sdf_candidates = [
+        os.path.join(output_dir, "lead_selection", "leads.sdf"),
+        os.path.join(output_dir, "docking", "best_poses.sdf"),
+        os.path.join(output_dir, "lead_selection", "best_lead.sdf"),
+        os.path.join(output_dir, "ranking", "top_candidates.sdf"),
+    ]
+    for sc in sdf_candidates:
+        if not os.path.isfile(sc):
+            continue
+        try:
+            with open(sc, "r", encoding="utf-8", errors="replace") as f:
+                sdf_text = f.read()
+            mols = sdf_text.split("$$$$")
+            for m in mols:
+                if not m.strip():
+                    continue
+                lines = m.strip().splitlines()
+                m_name = lines[0].strip() if lines else "Compound"
+                if m_name.endswith(".pdbqt") or "/" in m_name:
+                    m_name = Path(m_name).stem.replace("_poses", "")
+
+                aff = None
+                aff_match = re.search(r">\s+<.*?affinity.*?>\s*\n\s*([-\d.]+)", m, re.IGNORECASE)
+                if aff_match:
+                    aff = float(aff_match.group(1))
+                elif m_name in meta_by_name and meta_by_name[m_name].get("best_affinity") is not None:
+                    aff = float(meta_by_name[m_name]["best_affinity"])
+
+                if m_name not in docked_data:
+                    meta = meta_by_name.get(m_name, {})
+                    docked_data[m_name] = {
+                        "name": m_name,
+                        "smiles": meta.get("smiles", ""),
+                        "best_affinity": aff if aff is not None else -7.0,
+                        "le": meta.get("le"),
+                        "lle": meta.get("lle"),
+                        "composite_score": meta.get("composite_score"),
+                        "poses": [{
+                            "pose_id": 1,
+                            "affinity": aff,
+                            "rmsd_lb": 0.0,
+                            "rmsd_ub": 0.0,
+                            "format": "sdf",
+                            "data": m.strip() + "\n$$$$\n"
+                        }]
+                    }
+        except Exception:
+            pass
+
+    # Sort ligands by best affinity (most negative first)
+    sorted_data = dict(sorted(
+        docked_data.items(),
+        key=lambda item: float(item[1].get("best_affinity", 0.0) if item[1].get("best_affinity") is not None else 0.0)
+    ))
+    return sorted_data
 
 
 def generate_report(
@@ -178,24 +362,12 @@ def generate_report(
             except Exception:
                 pass
 
-    # Locate top ligand pose
-    ligand_pose_content = ""
-    pose_candidates = [
-        os.path.join(output_dir, "lead_selection", "best_lead.sdf"),
-        os.path.join(output_dir, "ranking", "top_candidates.sdf"),
-        os.path.join(output_dir, "docking", "best_poses.sdf"),
-    ]
-    for psc in pose_candidates:
-        if os.path.isfile(psc):
-            try:
-                with open(psc, "r", encoding="utf-8", errors="replace") as lf:
-                    # Take first record up to $$$$
-                    all_text = lf.read()
-                    first_mol = all_text.split("$$$$")[0] + "$$$$\n"
-                    ligand_pose_content = first_mol
-                break
-            except Exception:
-                pass
+    # Extract all docked ligands and poses for 3D Viewer
+    docked_ligands_data = _extract_docked_ligands_and_poses(
+        output_dir=output_dir,
+        ranking_df=primary_df,
+        docking_df=docking_csv,
+    )
 
     # 4. Generate Plotly Charts (HTML snippet format)
     charts_html = _build_plotly_charts(
@@ -374,7 +546,7 @@ def generate_report(
         table_rows_html=table_rows_html,
         charts_html=charts_html,
         protein_pdb=protein_pdb_content,
-        ligand_sdf=ligand_pose_content,
+        docked_ligands_data=docked_ligands_data,
         quarantine_html=quarantine_html,
         logs_html=logs_html,
     )
@@ -665,11 +837,10 @@ def generate_optimization_figures(df: pd.DataFrame, parent_df: pd.DataFrame, out
 
 
 def _build_plotly_charts(dl_df, admet_df, docking_df, ranking_df, total_screened, passed_dl, passed_admet, total_docked) -> str:
-    """Build Plotly chart interactive HTML blocks."""
+    """Build responsive Plotly interactive chart HTML blocks with clear gridlines and no overlap."""
     charts = []
     try:
         import plotly.graph_objects as go
-        from plotly.subplots import make_subplots
 
         # Chart 1: Screening Funnel
         funnel_stages = ["Input Library", "Drug-Likeness", "ADMET Pass", "Docked Hits"]
@@ -683,58 +854,148 @@ def _build_plotly_charts(dl_df, admet_df, docking_df, ranking_df, total_screened
             y=funnel_stages,
             x=funnel_counts,
             textinfo="value+percent initial",
-            marker=dict(color=["#3182ce", "#4299e1", "#48bb78", "#38a169"])
+            opacity=0.9,
+            marker=dict(
+                color=["#2b6cb0", "#3182ce", "#319795", "#38a169"],
+                line=dict(width=1, color="#1a365d")
+            ),
+            connector=dict(line=dict(color="#cbd5e1", width=1.5))
         ))
         fig_funnel.update_layout(
-            title="Virtual Screening Attrition Funnel",
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=320,
+            title=dict(text="Virtual Screening Attrition Funnel", font=dict(size=14, color="#1a202c", family="sans-serif")),
+            autosize=True,
+            margin=dict(l=110, r=25, t=50, b=25),
+            height=340,
+            template="plotly_white",
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
         )
-        charts.append(fig_funnel.to_html(full_html=False, include_plotlyjs="cdn"))
+        charts.append(fig_funnel.to_html(full_html=False, include_plotlyjs=False, config={"responsive": True, "displayModeBar": False}))
 
-        # Chart 2: Affinity Distribution or Affinity vs Score
+        # Chart 2: Affinity Distribution
         if docking_df is not None and "best_affinity" in docking_df.columns and not docking_df.empty:
             fig_hist = go.Figure()
+            aff_values = [float(a) for a in docking_df["best_affinity"] if pd.notnull(a)]
             fig_hist.add_trace(go.Histogram(
-                x=docking_df["best_affinity"],
-                nbinsx=15,
-                marker_color="#2b6cb0",
-                opacity=0.85
+                x=aff_values,
+                nbinsx=max(6, min(15, len(aff_values) * 2)),
+                marker=dict(color="#2b6cb0", line=dict(color="#1a365d", width=1)),
+                opacity=0.85,
+                hovertemplate="Affinity: %{x:.2f} kcal/mol<br>Count: %{y}<extra></extra>"
             ))
+            if aff_values:
+                mean_aff = float(np.mean(aff_values))
+                fig_hist.add_vline(
+                    x=mean_aff,
+                    line_width=2,
+                    line_dash="dash",
+                    line_color="#e53e3e",
+                    annotation_text=f"Mean: {mean_aff:.2f}",
+                    annotation_position="top right",
+                    annotation_font=dict(color="#e53e3e", size=11)
+                )
             fig_hist.update_layout(
-                title="Binding Affinity Distribution (AutoDock Vina)",
+                title=dict(text="Binding Affinity Distribution (AutoDock Vina)", font=dict(size=14, color="#1a202c", family="sans-serif")),
                 xaxis_title="Binding Affinity (kcal/mol)",
                 yaxis_title="Molecule Count",
-                margin=dict(l=20, r=20, t=40, b=20),
-                height=320,
+                autosize=True,
+                margin=dict(l=55, r=25, t=50, b=45),
+                height=340,
+                template="plotly_white",
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
             )
-            charts.append(fig_hist.to_html(full_html=False, include_plotlyjs=False))
+            fig_hist.update_xaxes(
+                showgrid=True,
+                gridwidth=1,
+                gridcolor="#e2e8f0",
+                showline=True,
+                linewidth=1,
+                linecolor="#cbd5e1",
+                mirror=True,
+                zeroline=False,
+            )
+            fig_hist.update_yaxes(
+                showgrid=True,
+                gridwidth=1,
+                gridcolor="#e2e8f0",
+                showline=True,
+                linewidth=1,
+                linecolor="#cbd5e1",
+                mirror=True,
+                zeroline=False,
+            )
+            charts.append(fig_hist.to_html(full_html=False, include_plotlyjs=False, config={"responsive": True, "displayModeBar": False}))
 
-        # Chart 3: Physicochemical Distributions (MW vs LogP)
+        # Chart 3: Physicochemical Distributions (MW vs LogP) - Chemical Space with crisp grid & Lipinski rules
         if dl_df is not None and "MW" in dl_df.columns and "LogP" in dl_df.columns:
             fig_scatter = go.Figure()
+            names = dl_df["name"] if "name" in dl_df.columns else [f"Mol_{i+1}" for i in range(len(dl_df))]
             fig_scatter.add_trace(go.Scatter(
                 x=dl_df["MW"],
                 y=dl_df["LogP"],
-                mode="markers",
-                marker=dict(size=8, color="#805ad5", opacity=0.7),
-                text=dl_df["name"] if "name" in dl_df.columns else None,
-                hoverinfo="text+x+y"
+                mode="markers+text" if len(dl_df) <= 8 else "markers",
+                text=names,
+                textposition="top center",
+                textfont=dict(size=10, color="#4a5568"),
+                marker=dict(size=11, color="#805ad5", opacity=0.85, line=dict(width=1.5, color="#44337a")),
+                hovertemplate="<b>%{text}</b><br>MW: %{x:.1f} Da<br>cLogP: %{y:.2f}<extra></extra>"
             ))
+
+            # Lipinski Rule-of-5 threshold boundary lines
+            fig_scatter.add_vline(
+                x=500,
+                line_width=1.5,
+                line_dash="dot",
+                line_color="#e53e3e",
+                annotation_text="Lipinski MW ≤ 500",
+                annotation_position="bottom right",
+                annotation_font=dict(color="#e53e3e", size=10)
+            )
+            fig_scatter.add_hline(
+                y=5.0,
+                line_width=1.5,
+                line_dash="dot",
+                line_color="#e53e3e",
+                annotation_text="Lipinski cLogP ≤ 5.0",
+                annotation_position="top left",
+                annotation_font=dict(color="#e53e3e", size=10)
+            )
+
             fig_scatter.update_layout(
-                title="Chemical Space (MW vs cLogP)",
+                title=dict(text="Chemical Space (MW vs cLogP)", font=dict(size=14, color="#1a202c", family="sans-serif")),
                 xaxis_title="Molecular Weight (Da)",
                 yaxis_title="cLogP",
-                margin=dict(l=20, r=20, t=40, b=20),
-                height=320,
+                autosize=True,
+                margin=dict(l=55, r=25, t=50, b=45),
+                height=340,
+                template="plotly_white",
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
             )
-            charts.append(fig_scatter.to_html(full_html=False, include_plotlyjs=False))
+            fig_scatter.update_xaxes(
+                showgrid=True,
+                gridwidth=1,
+                gridcolor="#e2e8f0",
+                showline=True,
+                linewidth=1,
+                linecolor="#cbd5e1",
+                mirror=True,
+                zeroline=True,
+                zerolinecolor="#cbd5e1",
+            )
+            fig_scatter.update_yaxes(
+                showgrid=True,
+                gridwidth=1,
+                gridcolor="#e2e8f0",
+                showline=True,
+                linewidth=1,
+                linecolor="#cbd5e1",
+                mirror=True,
+                zeroline=True,
+                zerolinecolor="#cbd5e1",
+            )
+            charts.append(fig_scatter.to_html(full_html=False, include_plotlyjs=False, config={"responsive": True, "displayModeBar": False}))
 
     except Exception as e:
         logger.warning(f"Could not build Plotly charts: {e}")
@@ -742,8 +1003,8 @@ def _build_plotly_charts(dl_df, admet_df, docking_df, ranking_df, total_screened
     if not charts:
         return "<p style='color:#718096;'>No chart data available.</p>"
 
-    # Wrap in responsive grid
-    grid_html = "<div style='display:grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px;'>"
+    # Wrap in responsive grid with CSS containment to prevent any SVG overflow
+    grid_html = "<div class='chart-grid'>"
     for c in charts:
         grid_html += f"<div class='chart-box'>{c}</div>"
     grid_html += "</div>"
@@ -754,78 +1015,373 @@ def _build_html_template(
     report_title, workflow_type, timestamp,
     total_screened, passed_dl, passed_admet, total_docked,
     best_affinity, top_lead_name, top_lead_score,
-    table_rows_html, charts_html, protein_pdb, ligand_sdf, quarantine_html,
+    table_rows_html, charts_html, protein_pdb, docked_ligands_data: dict, quarantine_html,
     logs_html: str = ""
 ) -> str:
-    """Combine components into a modern responsive HTML report."""
+    """Combine components into a modern responsive HTML report with advanced 3D visualizer and charts."""
     
-    # Escape structures for safe JS injection
-    clean_protein = json.dumps(protein_pdb)
-    clean_ligand = json.dumps(ligand_sdf)
-    has_3d = bool(protein_pdb or ligand_sdf)
+    clean_protein = json.dumps(protein_pdb or "")
+    docked_data_json = json.dumps(docked_ligands_data or {})
+    has_3d = bool(protein_pdb or docked_ligands_data)
 
     viewer_section = ""
     if has_3d:
         viewer_section = f"""
         <div class="card" style="margin-top: 30px;">
-          <h3>🔬 3D Molecular Complex & Active Site Pose</h3>
-          <p style="color:#718096; font-size:14px; margin-bottom:12px;">
-            Interactive 3D visualization of target protein and top docking pose. Use left-click to rotate, right-click to translate, and scroll to zoom.
-          </p>
-          <div id="pose3d_viewer" style="height: 480px; width: 100%; position: relative; border-radius: 8px; overflow: hidden; background: #1a202c;"></div>
-          <div style="display:flex; gap:10px; margin-top:10px;">
-            <button class="btn" onclick="reset3DView()">Reset Orientation</button>
-            <button class="btn" onclick="toggleProteinStyle()">Toggle Surface / Cartoon</button>
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 16px;">
+            <div>
+              <h3 style="margin-bottom: 4px;">🔬 Interactive 3D Molecular Complex & Docked Poses</h3>
+              <p style="color:#718096; font-size:14px; margin: 0;">
+                Rotate (Left Click + Drag), Pan (Right Click + Drag), Zoom (Scroll). Inspect all docked ligands and poses in the binding cavity.
+              </p>
+            </div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <button id="btn_bg_mode" class="btn btn-sm" onclick="toggleBackground()" title="Toggle Light / Dark Background">☀️ Light BG</button>
+              <button class="btn btn-sm" onclick="focusOnPocket()" title="Focus camera on active site cavity and ligand pose">🎯 Focus Pocket</button>
+              <button class="btn btn-sm" onclick="zoomFullProtein()" title="View whole target protein complex">🌐 Full Complex</button>
+              <button class="btn btn-sm" onclick="reset3DView()" title="Reset 3D camera orientation">🔄 Reset View</button>
+            </div>
           </div>
+
+          <!-- Selection & Metrics Ribbon -->
+          <div style="background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; margin-bottom: 14px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between;">
+            <!-- Dropdowns & Toggles -->
+            <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: center;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <label for="ligand_select" style="font-size: 13px; font-weight: 600; color: #4a5568;">Ligand:</label>
+                <select id="ligand_select" onchange="onLigandChange()" style="padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border); font-size: 13px; font-weight: 600; background: #ffffff; color: #1a202c; cursor: pointer;">
+                </select>
+              </div>
+
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <label for="pose_select" style="font-size: 13px; font-weight: 600; color: #4a5568;">Pose:</label>
+                <select id="pose_select" onchange="onPoseChange()" style="padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border); font-size: 13px; font-weight: 600; background: #ffffff; color: #1a202c; cursor: pointer;">
+                </select>
+              </div>
+
+              <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: #4a5568; cursor: pointer; user-select: none;">
+                <input type="checkbox" id="chk_pocket_residues" onchange="togglePocketResidues()" checked style="cursor: pointer; width: 14px; height: 14px;">
+                Pocket Residues (within 5 Å)
+              </label>
+            </div>
+
+            <!-- Active Pose Metrics Badges -->
+            <div id="pose_metrics_container" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+              <span id="badge_affinity" class="badge" style="background: #ebf8ff; color: #2b6cb0; font-size: 13px; font-weight: 700; padding: 6px 12px; border: 1px solid #bee3f8;">
+                ΔG: -- kcal/mol
+              </span>
+              <span id="badge_pose_num" class="badge" style="background: #edf2f7; color: #4a5568; font-size: 12px; padding: 6px 10px;">
+                Pose 1 / 1
+              </span>
+              <span id="badge_rmsd" class="badge" style="background: #edf2f7; color: #4a5568; font-size: 12px; padding: 6px 10px;">
+                RMSD: 0.00 Å
+              </span>
+              <span id="badge_le" class="badge" style="background: #def7ec; color: #2f855a; font-size: 12px; padding: 6px 10px; display: none;">
+                LE: --
+              </span>
+            </div>
+          </div>
+
+          <!-- Style Selectors Ribbon -->
+          <div style="display: flex; flex-wrap: wrap; gap: 18px; align-items: center; margin-bottom: 12px; padding: 0 2px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 13px; font-weight: 600; color: #718096;">Protein:</span>
+              <div class="style-btn-group" id="protein_style_group">
+                <button type="button" class="btn btn-sm btn-active" onclick="setProteinStyle('cartoon', this)">Cartoon</button>
+                <button type="button" class="btn btn-sm" onclick="setProteinStyle('surface', this)">Surface</button>
+                <button type="button" class="btn btn-sm" onclick="setProteinStyle('cartoon_surface', this)">Cartoon + Surface</button>
+                <button type="button" class="btn btn-sm" onclick="setProteinStyle('sticks', this)">Sticks</button>
+                <button type="button" class="btn btn-sm" onclick="setProteinStyle('wireframe', this)">Wireframe</button>
+                <button type="button" class="btn btn-sm" onclick="setProteinStyle('off', this)">Hide</button>
+              </div>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 13px; font-weight: 600; color: #718096;">Ligand:</span>
+              <div class="style-btn-group" id="ligand_style_group">
+                <button type="button" class="btn btn-sm btn-active" onclick="setLigandStyle('sticks', this)">Sticks</button>
+                <button type="button" class="btn btn-sm" onclick="setLigandStyle('ball_stick', this)">Ball &amp; Stick</button>
+                <button type="button" class="btn btn-sm" onclick="setLigandStyle('spheres', this)">Spheres</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 3Dmol Canvas Container -->
+          <div id="pose3d_viewer" style="height: 520px; width: 100%; position: relative; border-radius: 8px; overflow: hidden; background: #1a202c; border: 1px solid var(--border);"></div>
         </div>
 
         <script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.4.2/3Dmol-min.js"></script>
         <script>
           let glviewer = null;
-          let showSurface = false;
-          let surfId = null;
+          let protModel = null;
+          let ligModel = null;
+          let surfaceObj = null;
+
+          let isDarkMode = true;
+          let currentProtStyle = "cartoon";
+          let currentLigStyle = "sticks";
+          let showPocketResidues = true;
+
+          const allDockedData = {docked_data_json};
+          const protData = {clean_protein};
 
           document.addEventListener("DOMContentLoaded", function() {{
+            init3DViewer();
+          }});
+
+          function init3DViewer() {{
             let container = document.getElementById("pose3d_viewer");
             if (!container) return;
 
             let config = {{ backgroundColor: "#1a202c" }};
             glviewer = $3Dmol.createViewer(container, config);
 
-            let protData = {clean_protein};
-            let ligData = {clean_ligand};
-
             if (protData && protData.length > 20) {{
-              glviewer.addModel(protData, "pdb");
-              glviewer.setStyle({{}}, {{cartoon: {{color: "spectrum", opacity: 0.85}}}});
+              protModel = glviewer.addModel(protData, "pdb");
             }}
 
-            if (ligData && ligData.length > 20) {{
-              glviewer.addModel(ligData, "sdf");
-              glviewer.setStyle({{model: -1}}, {{stick: {{colorscheme: "greenCarbon", radius: 0.25}}, sphere: {{radius: 0.45}}}});
+            let ligSelect = document.getElementById("ligand_select");
+            if (ligSelect) {{
+              ligSelect.innerHTML = "";
+              let ligNames = Object.keys(allDockedData);
+              if (ligNames.length > 0) {{
+                ligNames.forEach(function(name) {{
+                  let ldata = allDockedData[name];
+                  let affStr = (ldata.best_affinity !== undefined && ldata.best_affinity !== null) 
+                    ? (" (" + Number(ldata.best_affinity).toFixed(2) + " kcal/mol)") 
+                    : "";
+                  let opt = document.createElement("option");
+                  opt.value = name;
+                  opt.textContent = name + affStr;
+                  ligSelect.appendChild(opt);
+                }});
+                populatePoseSelect(ligNames[0]);
+              }} else {{
+                let opt = document.createElement("option");
+                opt.textContent = "No docked poses found";
+                ligSelect.appendChild(opt);
+              }}
             }}
 
-            glviewer.zoomTo();
-            glviewer.render();
-          }});
-
-          function reset3DView() {{
-            if (glviewer) {{
-              glviewer.zoomTo();
-              glviewer.render();
-            }}
+            applyStyles();
+            setTimeout(function() {{
+              focusOnPocket();
+            }}, 200);
           }}
 
-          function toggleProteinStyle() {{
+          function populatePoseSelect(ligName) {{
+            let poseSelect = document.getElementById("pose_select");
+            if (!poseSelect) return;
+            poseSelect.innerHTML = "";
+
+            let ldata = allDockedData[ligName];
+            if (!ldata || !ldata.poses || ldata.poses.length === 0) {{
+              let opt = document.createElement("option");
+              opt.textContent = "Pose 1";
+              opt.value = "0";
+              poseSelect.appendChild(opt);
+            }} else {{
+              ldata.poses.forEach(function(p, idx) {{
+                let opt = document.createElement("option");
+                opt.value = idx.toString();
+                let affTxt = (p.affinity !== null && p.affinity !== undefined) 
+                  ? (" (ΔG: " + Number(p.affinity).toFixed(2) + " kcal/mol)") 
+                  : "";
+                opt.textContent = "Pose " + (idx + 1) + affTxt;
+                poseSelect.appendChild(opt);
+              }});
+            }}
+
+            loadActivePose();
+          }}
+
+          function onLigandChange() {{
+            let ligSelect = document.getElementById("ligand_select");
+            if (!ligSelect) return;
+            populatePoseSelect(ligSelect.value);
+          }}
+
+          function onPoseChange() {{
+            loadActivePose();
+          }}
+
+          function loadActivePose() {{
             if (!glviewer) return;
-            showSurface = !showSurface;
-            if (showSurface) {{
-              surfId = glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.5, color: "white"}}, {{model: 0}});
-            }} else if (surfId) {{
-              glviewer.removeSurface(surfId);
-              surfId = null;
+            let ligSelect = document.getElementById("ligand_select");
+            let poseSelect = document.getElementById("pose_select");
+            if (!ligSelect || !poseSelect) return;
+
+            let ligName = ligSelect.value;
+            let poseIdx = parseInt(poseSelect.value, 10);
+            let ldata = allDockedData[ligName];
+            if (!ldata || !ldata.poses || !ldata.poses[poseIdx]) return;
+
+            let pose = ldata.poses[poseIdx];
+
+            if (ligModel !== null) {{
+              glviewer.removeModel(ligModel);
+              ligModel = null;
+            }}
+
+            if (pose.data && pose.data.length > 20) {{
+              let fmt = pose.format || "pdb";
+              ligModel = glviewer.addModel(pose.data, fmt);
+            }}
+
+            let affBadge = document.getElementById("badge_affinity");
+            if (affBadge) {{
+              let affVal = (pose.affinity !== null && pose.affinity !== undefined) 
+                ? ("ΔG: " + Number(pose.affinity).toFixed(2) + " kcal/mol") 
+                : "ΔG: N/A";
+              affBadge.innerText = affVal;
+            }}
+
+            let poseBadge = document.getElementById("badge_pose_num");
+            if (poseBadge) {{
+              poseBadge.innerText = "Pose " + (poseIdx + 1) + " / " + ldata.poses.length;
+            }}
+
+            let rmsdBadge = document.getElementById("badge_rmsd");
+            if (rmsdBadge) {{
+              let rmsdVal = (pose.rmsd_lb !== undefined && pose.rmsd_lb !== null) 
+                ? Number(pose.rmsd_lb).toFixed(2) 
+                : "0.00";
+              rmsdBadge.innerText = "RMSD: " + rmsdVal + " Å";
+            }}
+
+            let leBadge = document.getElementById("badge_le");
+            if (leBadge) {{
+              if (ldata.le) {{
+                leBadge.innerText = "LE: " + ldata.le;
+                leBadge.style.display = "inline-block";
+              }} else {{
+                leBadge.style.display = "none";
+              }}
+            }}
+
+            applyStyles();
+            focusOnPocket();
+          }}
+
+          function applyStyles() {{
+            if (!glviewer) return;
+
+            if (surfaceObj !== null) {{
+              glviewer.removeSurface(surfaceObj);
+              surfaceObj = null;
+            }}
+
+            // 1. Protein styles
+            if (protModel !== null) {{
+              let protColor = "spectrum";
+              if (currentProtStyle === "cartoon") {{
+                glviewer.setStyle({{model: protModel}}, {{cartoon: {{color: protColor, opacity: 0.85}}}});
+              }} else if (currentProtStyle === "surface") {{
+                glviewer.setStyle({{model: protModel}}, {{cartoon: {{opacity: 0.05}}}});
+                let surfColor = isDarkMode ? "white" : "#cbd5e1";
+                surfaceObj = glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.65, color: surfColor}}, {{model: protModel}});
+              }} else if (currentProtStyle === "cartoon_surface") {{
+                glviewer.setStyle({{model: protModel}}, {{cartoon: {{color: protColor, opacity: 0.85}}}});
+                let surfColor = isDarkMode ? "white" : "#cbd5e1";
+                surfaceObj = glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.35, color: surfColor}}, {{model: protModel}});
+              }} else if (currentProtStyle === "sticks") {{
+                glviewer.setStyle({{model: protModel}}, {{stick: {{colorscheme: "amino", radius: 0.16}}, cartoon: {{opacity: 0.2}}}});
+              }} else if (currentProtStyle === "wireframe") {{
+                glviewer.setStyle({{model: protModel}}, {{line: {{color: isDarkMode ? "#e2e8f0" : "#4a5568"}}}});
+              }} else if (currentProtStyle === "off") {{
+                glviewer.setStyle({{model: protModel}}, {{}});
+              }}
+
+              // Highlight pocket residues within 5Å of ligand
+              if (showPocketResidues && ligModel !== null && currentProtStyle !== "off" && currentProtStyle !== "sticks") {{
+                glviewer.setStyle(
+                  {{model: protModel, within: {{distance: 5.0, sel: {{model: ligModel}}}}}},
+                  {{stick: {{colorscheme: "amino", radius: 0.22}}, cartoon: {{opacity: 0.5}}}}
+                );
+              }}
+            }}
+
+            // 2. Ligand styles
+            if (ligModel !== null) {{
+              let carbonScheme = "greenCarbon";
+              if (currentLigStyle === "sticks") {{
+                glviewer.setStyle({{model: ligModel}}, {{stick: {{colorscheme: carbonScheme, radius: 0.28}}}});
+              }} else if (currentLigStyle === "ball_stick") {{
+                glviewer.setStyle({{model: ligModel}}, {{
+                  stick: {{colorscheme: carbonScheme, radius: 0.22}},
+                  sphere: {{radius: 0.42, colorscheme: carbonScheme}}
+                }});
+              }} else if (currentLigStyle === "spheres") {{
+                glviewer.setStyle({{model: ligModel}}, {{sphere: {{colorscheme: carbonScheme}}}});
+              }}
+            }}
+
+            glviewer.render();
+          }}
+
+          function setProteinStyle(styleName, btn) {{
+            currentProtStyle = styleName;
+            if (btn && btn.parentElement) {{
+              btn.parentElement.querySelectorAll(".btn").forEach(b => b.classList.remove("btn-active"));
+              btn.classList.add("btn-active");
+            }}
+            applyStyles();
+          }}
+
+          function setLigandStyle(styleName, btn) {{
+            currentLigStyle = styleName;
+            if (btn && btn.parentElement) {{
+              btn.parentElement.querySelectorAll(".btn").forEach(b => b.classList.remove("btn-active"));
+              btn.classList.add("btn-active");
+            }}
+            applyStyles();
+          }}
+
+          function togglePocketResidues() {{
+            let chk = document.getElementById("chk_pocket_residues");
+            showPocketResidues = chk ? chk.checked : false;
+            applyStyles();
+          }}
+
+          function toggleBackground() {{
+            if (!glviewer) return;
+            isDarkMode = !isDarkMode;
+            let bg = isDarkMode ? "#1a202c" : "#ffffff";
+            glviewer.setBackgroundColor(bg);
+
+            let btn = document.getElementById("btn_bg_mode");
+            if (btn) {{
+              btn.innerHTML = isDarkMode ? "☀️ Light BG" : "🌙 Dark BG";
+            }}
+            let container = document.getElementById("pose3d_viewer");
+            if (container) {{
+              container.style.backgroundColor = bg;
+            }}
+            applyStyles();
+          }}
+
+          function focusOnPocket() {{
+            if (!glviewer) return;
+            if (ligModel !== null) {{
+              glviewer.zoomTo({{within: {{distance: 7.0, sel: {{model: ligModel}}}}}}, 400);
+            }} else if (protModel !== null) {{
+              glviewer.zoomTo({{model: protModel}}, 400);
+            }} else {{
+              glviewer.zoomTo();
             }}
             glviewer.render();
+          }}
+
+          function zoomFullProtein() {{
+            if (!glviewer) return;
+            glviewer.zoomTo();
+            glviewer.render();
+          }}
+
+          function reset3DView() {{
+            if (!glviewer) return;
+            glviewer.setCameraDirection([0, 0, 1]);
+            focusOnPocket();
           }}
         </script>
         """
@@ -836,6 +1392,7 @@ def _build_html_template(
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>{html.escape(report_title)}</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <style>
     :root {{
       --primary: #2b6cb0;
@@ -912,11 +1469,28 @@ def _build_html_template(
       box-shadow: 0 1px 3px rgba(0,0,0,0.05);
       margin-bottom: 24px;
     }}
+
+    /* Chart Grid & Containers (Prevents overlapping) */
+    .chart-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+      gap: 20px;
+      width: 100%;
+      box-sizing: border-box;
+    }}
     .chart-box {{
       background: var(--card-bg);
       border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px;
+      border-radius: 10px;
+      padding: 14px;
+      min-width: 0;
+      overflow: hidden;
+      position: relative;
+      box-sizing: border-box;
+    }}
+    .chart-box .plotly-graph-div {{
+      width: 100% !important;
+      height: 340px !important;
     }}
 
     /* Table */
@@ -952,6 +1526,31 @@ def _build_html_template(
       transition: background 0.15s ease;
     }}
     .btn:hover {{ background: #e2e8f0; }}
+    .btn-sm {{
+      padding: 5px 11px;
+      font-size: 12px;
+      font-weight: 600;
+    }}
+    .btn-active {{
+      background: var(--primary) !important;
+      color: #ffffff !important;
+      border-color: var(--primary) !important;
+    }}
+    .style-btn-group {{
+      display: inline-flex;
+      border-radius: 6px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }}
+    .style-btn-group .btn {{
+      border-radius: 0;
+      border: none;
+      border-right: 1px solid var(--border);
+      margin: 0;
+    }}
+    .style-btn-group .btn:last-child {{
+      border-right: none;
+    }}
 
     footer {{
       text-align: center;
@@ -1050,6 +1649,20 @@ def _build_html_template(
       Generated automatically by <strong>DrugLab v0.2.0</strong> — Lightweight Computational Drug Discovery Platform.
     </footer>
   </div>
+
+  <script>
+    // Responsive Plotly resize handler
+    window.addEventListener("resize", function() {{
+      document.querySelectorAll(".plotly-graph-div").forEach(function(el) {{
+        if (window.Plotly && el) {{
+          Plotly.Plots.resize(el);
+        }}
+      }});
+    }});
+    setTimeout(function() {{
+      window.dispatchEvent(new Event("resize"));
+    }}, 250);
+  </script>
 </body>
 </html>
 """
