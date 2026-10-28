@@ -510,7 +510,7 @@ def generate_report(
         quarantine_html = f"""
         <div class="card" style="margin-top: 30px;">
           <h3 style="color:#c53030; display:flex; align-items:center; gap:8px;">
-            ⚠️ Quarantined Molecule Diagnostics ({len(quarantine_records)})
+            Quarantined Molecule Diagnostics ({len(quarantine_records)})
           </h3>
           <p style="color:#718096; font-size:14px;">The following compounds encountered formatting or calculation exceptions and were quarantined to prevent workflow termination.</p>
           <div style="overflow-x:auto;">
@@ -572,8 +572,8 @@ def generate_report(
             log_cards.append(f"""
             <details class="log-card" style="margin-bottom: 12px; border: 1px solid var(--border); border-radius: 0; overflow: hidden; background: #ffffff;">
               <summary style="padding: 12px 16px; background: #f8fafc; font-weight: 600; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none;">
-                <span style="display:flex; align-items:center; gap:8px;">📄 <b>{html.escape(mod_title)} Log</b></span>
-                <span style="font-size: 12px; color: var(--primary); font-weight: 500;">Click to view log ▾</span>
+                <span style="display:flex; align-items:center; gap:8px;"><b>{html.escape(mod_title)} Log</b></span>
+                <span style="font-size: 12px; color: var(--primary); font-weight: 500;">Click to view log</span>
               </summary>
               <div style="padding: 14px; background: #0f172a; color: #f1f5f9; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; max-height: 400px; overflow-y: auto;">
                 <pre style="margin: 0; white-space: pre-wrap; word-break: break-all;">{html.escape(log_text)}</pre>
@@ -584,7 +584,7 @@ def generate_report(
         logs_html = f"""
         <div class="card" style="margin-top: 30px;">
           <h3 style="display:flex; align-items:center; gap:8px;">
-            📋 Module Execution Logs ({len(log_cards)})
+            Module Execution Logs ({len(log_cards)})
           </h3>
           <p style="color:#718096; font-size:14px; margin-bottom: 16px;">
             Detailed execution logs are minimized by default. Click any module header below to expand and review full technical outputs.
@@ -1092,16 +1092,16 @@ def _build_html_template(
         <div class="card" style="margin-top: 30px; border-radius: 0;">
           <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 16px;">
             <div>
-              <h3 style="margin-bottom: 4px;">🔬 Interactive 3D Molecular Complex & Docked Poses</h3>
+              <h3 style="margin-bottom: 4px;">Interactive 3D Molecular Complex & Docked Poses</h3>
               <p style="color:#718096; font-size:14px; margin: 0;">
                 Rotate (Left Click + Drag), Pan (Right Click + Drag), Zoom (Scroll). Inspect all docked ligands and poses in the binding cavity.
               </p>
             </div>
             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-              <button id="btn_bg_mode" class="btn btn-sm" onclick="toggleBackground()" title="Toggle Light / Dark Background">☀️ Light BG</button>
-              <button class="btn btn-sm" onclick="focusLigand()" title="Focus camera on the docked ligand pose">🎯 Focus Ligand</button>
-              <button class="btn btn-sm" onclick="zoomFullProtein()" title="View whole target protein complex">🌐 Full Complex</button>
-              <button class="btn btn-sm" onclick="reset3DView()" title="Reset 3D camera orientation">🔄 Reset View</button>
+              <button id="btn_bg_mode" class="btn btn-sm" onclick="toggleBackground()" title="Toggle Light / Dark Background">Light Background</button>
+              <button class="btn btn-sm" onclick="focusLigand()" title="Focus camera on the docked ligand pose">Focus Ligand</button>
+              <button class="btn btn-sm" onclick="zoomFullProtein()" title="View whole target protein complex">Full Complex</button>
+              <button class="btn btn-sm" onclick="reset3DView()" title="Reset 3D camera orientation">Reset View</button>
             </div>
           </div>
 
@@ -1177,7 +1177,6 @@ def _build_html_template(
           let glviewer = null;
           let protModel = null;
           let ligModel = null;
-          let surfaceObj = null;
 
           let isDarkMode = true;
           let currentProtStyle = "cartoon";
@@ -1326,26 +1325,66 @@ def _build_html_template(
           function applyStyles() {{
             if (!glviewer) return;
 
-            if (surfaceObj !== null) {{
-              glviewer.removeSurface(surfaceObj);
-              surfaceObj = null;
-            }}
+            // Synchronously remove and dispose all previous surfaces to prevent WebGL lockups
+            glviewer.removeAllSurfaces();
 
             // 1. Protein styles
             if (protModel !== null) {{
               let protColor = "spectrum";
               protModel.setStyle({{}}, {{}});
 
+              let protAtoms = protModel.selectedAtoms({{}}) || [];
+              let ligAtoms = (ligModel !== null) ? (ligModel.selectedAtoms({{}}) || []) : [];
+
+              // Compute pocket residues around the ligand in 3D cavity
+              let pocketResis = new Set();
+              if (ligAtoms.length > 0 && protAtoms.length > 0) {{
+                for (let i = 0; i < ligAtoms.length; i++) {{
+                  let la = ligAtoms[i];
+                  for (let j = 0; j < protAtoms.length; j++) {{
+                    let pa = protAtoms[j];
+                    let dx = la.x - pa.x;
+                    if (dx > 8.0 || dx < -8.0) continue;
+                    let dy = la.y - pa.y;
+                    if (dy > 8.0 || dy < -8.0) continue;
+                    let dz = la.z - pa.z;
+                    if (dz > 8.0 || dz < -8.0) continue;
+                    if (dx * dx + dy * dy + dz * dz <= 64.0) {{
+                      pocketResis.add(pa.resi);
+                    }}
+                  }}
+                }}
+              }}
+
+              // Surface selection: for large structures (>1500 atoms like 7DTD), surface the active binding cavity to keep performance instantaneous
+              let surfSel = {{}};
+              if (protAtoms.length > 1500) {{
+                if (pocketResis.size > 0) {{
+                  surfSel = {{model: protModel, resi: Array.from(pocketResis)}};
+                }} else if (protAtoms[0] && protAtoms[0].chain) {{
+                  surfSel = {{model: protModel, chain: protAtoms[0].chain}};
+                }} else {{
+                  surfSel = {{model: protModel}};
+                }}
+              }} else {{
+                surfSel = {{model: protModel}};
+              }}
+
+              let surfColor = isDarkMode ? "white" : "#cbd5e1";
+
               if (currentProtStyle === "cartoon") {{
                 protModel.setStyle({{}}, {{cartoon: {{color: protColor, opacity: 0.85}}}});
               }} else if (currentProtStyle === "surface") {{
-                protModel.setStyle({{}}, {{}});
-                let surfColor = isDarkMode ? "white" : "#cbd5e1";
-                surfaceObj = glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.65, color: surfColor}}, {{model: protModel}});
+                if (pocketResis.size > 0) {{
+                  protModel.setStyle(
+                    {{resi: Array.from(pocketResis)}},
+                    {{stick: {{colorscheme: "amino", radius: 0.16}}}}
+                  );
+                }}
+                glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.65, color: surfColor}}, surfSel);
               }} else if (currentProtStyle === "cartoon_surface") {{
                 protModel.setStyle({{}}, {{cartoon: {{color: protColor, opacity: 0.85}}}});
-                let surfColor = isDarkMode ? "white" : "#cbd5e1";
-                surfaceObj = glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.35, color: surfColor}}, {{model: protModel}});
+                glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.35, color: surfColor}}, surfSel);
               }} else if (currentProtStyle === "sticks") {{
                 protModel.setStyle({{}}, {{stick: {{colorscheme: "amino", radius: 0.16}}}});
               }} else if (currentProtStyle === "wireframe") {{
@@ -1354,34 +1393,14 @@ def _build_html_template(
                 protModel.setStyle({{}}, {{}});
               }}
 
-              // Highlight pocket residues within 5Å of ligand
-              if (showPocketResidues && ligModel !== null && currentProtStyle !== "off" && currentProtStyle !== "sticks") {{
-                let ligAtoms = ligModel.selectedAtoms({{}});
-                let protAtoms = protModel.selectedAtoms({{}});
-                if (ligAtoms && ligAtoms.length > 0 && protAtoms && protAtoms.length > 0) {{
-                  let pocketResis = new Set();
-                  for (let i = 0; i < ligAtoms.length; i++) {{
-                    let la = ligAtoms[i];
-                    for (let j = 0; j < protAtoms.length; j++) {{
-                      let pa = protAtoms[j];
-                      let dx = la.x - pa.x;
-                      if (dx > 5.0 || dx < -5.0) continue;
-                      let dy = la.y - pa.y;
-                      if (dy > 5.0 || dy < -5.0) continue;
-                      let dz = la.z - pa.z;
-                      if (dz > 5.0 || dz < -5.0) continue;
-                      if (dx * dx + dy * dy + dz * dz <= 25.0) {{
-                        pocketResis.add(pa.resi);
-                      }}
-                    }}
-                  }}
-                  if (pocketResis.size > 0) {{
-                    let resiList = Array.from(pocketResis);
-                    protModel.setStyle(
-                      {{resi: resiList}},
-                      {{stick: {{colorscheme: "amino", radius: 0.22}}, cartoon: {{color: protColor, opacity: 0.6}}}}
-                    );
-                  }}
+              // Highlight pocket residues within 5Å of ligand when in cartoon or wireframe mode
+              if (showPocketResidues && ligModel !== null && currentProtStyle !== "off" && currentProtStyle !== "sticks" && currentProtStyle !== "surface") {{
+                if (pocketResis.size > 0) {{
+                  let resiList = Array.from(pocketResis);
+                  protModel.setStyle(
+                    {{resi: resiList}},
+                    {{stick: {{colorscheme: "amino", radius: 0.22}}, cartoon: {{color: protColor, opacity: 0.6}}}}
+                  );
                 }}
               }}
             }}
@@ -1441,7 +1460,7 @@ def _build_html_template(
 
             let btn = document.getElementById("btn_bg_mode");
             if (btn) {{
-              btn.innerHTML = isDarkMode ? "☀️ Light BG" : "🌙 Dark BG";
+              btn.innerHTML = isDarkMode ? "Light Background" : "Dark Background";
             }}
             let container = document.getElementById("pose3d_viewer");
             if (container) {{
@@ -1700,7 +1719,7 @@ def _build_html_template(
 
     <!-- Charts Section -->
     <div class="card">
-      <h3>📊 Pipeline Analytics & Chemical Space</h3>
+      <h3>Pipeline Analytics & Chemical Space</h3>
       {charts_html}
     </div>
 
@@ -1709,7 +1728,7 @@ def _build_html_template(
 
     <!-- Top Candidates Table -->
     <div class="card">
-      <h3>🏆 Top Identified Lead Candidates</h3>
+      <h3>Top Identified Lead Candidates</h3>
       <p style="color:#718096; font-size:14px; margin-bottom:16px;">
         Ranked candidates prioritized by AutoDock Vina binding affinity, Ligand Efficiency (LE), Lipophilic Efficiency (LLE), and composite multi-parameter score.
       </p>
