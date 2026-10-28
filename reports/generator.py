@@ -11,10 +11,13 @@ Generates comprehensive, publication-grade HTML reports containing:
 """
 
 import os
+import sys
 import re
 import json
 import base64
 import html
+import shutil
+import subprocess
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Any
@@ -158,13 +161,38 @@ def _extract_docked_ligands_and_poses(output_dir: str, ranking_df=None, docking_
         except Exception:
             continue
 
-        raw_models = re.split(r"^MODEL\s+\d+", content, flags=re.MULTILINE)
+        raw_models = [m for m in re.split(r"^MODEL\s+\d+", content, flags=re.MULTILINE) if m.strip()]
         poses = []
         known_affs = affinities_by_name.get(lig_name, [])
 
+        # Try obabel conversion to get clean SDF format with complete bond connectivity
+        sdf_blocks = []
+        obabel_bin = shutil.which("obabel")
+        if not obabel_bin:
+            for cand in [
+                os.path.join(os.path.dirname(sys.executable), "obabel"),
+                "/home/faiyaz/miniconda3/envs/druglab/bin/obabel",
+                os.path.expanduser("~/miniconda3/envs/druglab/bin/obabel"),
+            ]:
+                if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                    obabel_bin = cand
+                    break
+
+        if obabel_bin:
+            try:
+                res = subprocess.run(
+                    [obabel_bin, str(pq_path), "-osdf"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if res.returncode == 0 and "$$$$" in res.stdout:
+                    raw_sdfs = [b.strip() for b in res.stdout.split("$$$$") if b.strip()]
+                    sdf_blocks = [b + "\n$$$$\n" for b in raw_sdfs]
+            except Exception:
+                sdf_blocks = []
+
         for rm in raw_models:
-            if not rm.strip():
-                continue
             aff = None
             rmsd_lb = 0.0
             rmsd_ub = 0.0
@@ -176,25 +204,59 @@ def _extract_docked_ligands_and_poses(output_dir: str, ranking_df=None, docking_
             elif len(poses) < len(known_affs):
                 aff = float(known_affs[len(poses)])
 
-            # Convert to standard clean PDB
-            pdb_lines = []
-            for line in rm.splitlines():
-                if line.startswith(("ATOM", "HETATM")):
-                    atom_name = line[12:16].strip()
-                    elem = atom_name[0] if atom_name else "C"
-                    base = line[:66].ljust(66)
-                    pdb_lines.append(f"{base}          {elem:>2}")
-                elif line.startswith("CONECT"):
-                    pdb_lines.append(line)
-            if pdb_lines:
+            pose_idx = len(poses)
+            if pose_idx < len(sdf_blocks):
                 poses.append({
-                    "pose_id": len(poses) + 1,
+                    "pose_id": pose_idx + 1,
                     "affinity": aff,
                     "rmsd_lb": rmsd_lb,
                     "rmsd_ub": rmsd_ub,
-                    "format": "pdb",
-                    "data": "\n".join(pdb_lines) + "\nEND\n"
+                    "format": "sdf",
+                    "data": sdf_blocks[pose_idx]
                 })
+            else:
+                # Fallback to clean PDB with HETATM and distance-based CONECT records
+                pdb_lines = []
+                atom_coords = []
+                for line in rm.splitlines():
+                    if line.startswith(("ATOM", "HETATM")):
+                        idx = len(atom_coords) + 1
+                        try:
+                            x = float(line[30:38])
+                            y = float(line[38:46])
+                            z = float(line[46:54])
+                            atom_name = line[12:16].strip()
+                            elem = atom_name[0] if atom_name else "C"
+                            atom_coords.append((idx, x, y, z, elem))
+                        except Exception:
+                            elem = "C"
+                        base = f"HETATM{line[6:66].ljust(60)}"
+                        pdb_lines.append(f"{base}          {elem:>2}")
+
+                conect_map = {}
+                for i, (i_idx, x1, y1, z1, el1) in enumerate(atom_coords):
+                    for j in range(i + 1, len(atom_coords)):
+                        j_idx, x2, y2, z2, el2 = atom_coords[j]
+                        d2 = (x1 - x2) ** 2 + (y1 - y2) ** 2 + (z1 - z2) ** 2
+                        cutoff = 1.25 if (el1 == "H" or el2 == "H") else 1.85
+                        if 0.16 < d2 <= (cutoff * cutoff):
+                            conect_map.setdefault(i_idx, []).append(j_idx)
+                            conect_map.setdefault(j_idx, []).append(i_idx)
+
+                for c_idx in sorted(conect_map.keys()):
+                    b_str = "".join(f"{b:>5}" for b in conect_map[c_idx])
+                    pdb_lines.append(f"CONECT{c_idx:>5}{b_str}")
+
+                pdb_lines.append("END\n")
+                if pdb_lines:
+                    poses.append({
+                        "pose_id": pose_idx + 1,
+                        "affinity": aff,
+                        "rmsd_lb": rmsd_lb,
+                        "rmsd_ub": rmsd_ub,
+                        "format": "pdb",
+                        "data": "\n".join(pdb_lines)
+                    })
 
         if poses:
             meta = meta_by_name.get(lig_name, {})
@@ -508,7 +570,7 @@ def generate_report(
                 log_text = "(Could not read log file)"
 
             log_cards.append(f"""
-            <details class="log-card" style="margin-bottom: 12px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: #ffffff;">
+            <details class="log-card" style="margin-bottom: 12px; border: 1px solid var(--border); border-radius: 0; overflow: hidden; background: #ffffff;">
               <summary style="padding: 12px 16px; background: #f8fafc; font-weight: 600; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none;">
                 <span style="display:flex; align-items:center; gap:8px;">📄 <b>{html.escape(mod_title)} Log</b></span>
                 <span style="font-size: 12px; color: var(--primary); font-weight: 500;">Click to view log ▾</span>
@@ -1027,7 +1089,7 @@ def _build_html_template(
     viewer_section = ""
     if has_3d:
         viewer_section = f"""
-        <div class="card" style="margin-top: 30px;">
+        <div class="card" style="margin-top: 30px; border-radius: 0;">
           <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 16px;">
             <div>
               <h3 style="margin-bottom: 4px;">🔬 Interactive 3D Molecular Complex & Docked Poses</h3>
@@ -1044,18 +1106,18 @@ def _build_html_template(
           </div>
 
           <!-- Selection & Metrics Ribbon -->
-          <div style="background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; margin-bottom: 14px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between;">
+          <div style="background: #f8fafc; border: 1px solid var(--border); border-radius: 0; padding: 12px 16px; margin-bottom: 14px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between;">
             <!-- Dropdowns & Toggles -->
             <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: center;">
               <div style="display: flex; align-items: center; gap: 8px;">
                 <label for="ligand_select" style="font-size: 13px; font-weight: 600; color: #4a5568;">Ligand:</label>
-                <select id="ligand_select" onchange="onLigandChange()" style="padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border); font-size: 13px; font-weight: 600; background: #ffffff; color: #1a202c; cursor: pointer;">
+                <select id="ligand_select" onchange="onLigandChange()" style="padding: 5px 10px; border-radius: 0; border: 1px solid var(--border); font-size: 13px; font-weight: 600; background: #ffffff; color: #1a202c; cursor: pointer;">
                 </select>
               </div>
 
               <div style="display: flex; align-items: center; gap: 8px;">
                 <label for="pose_select" style="font-size: 13px; font-weight: 600; color: #4a5568;">Pose:</label>
-                <select id="pose_select" onchange="onPoseChange()" style="padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border); font-size: 13px; font-weight: 600; background: #ffffff; color: #1a202c; cursor: pointer;">
+                <select id="pose_select" onchange="onPoseChange()" style="padding: 5px 10px; border-radius: 0; border: 1px solid var(--border); font-size: 13px; font-weight: 600; background: #ffffff; color: #1a202c; cursor: pointer;">
                 </select>
               </div>
 
@@ -1067,16 +1129,16 @@ def _build_html_template(
 
             <!-- Active Pose Metrics Badges -->
             <div id="pose_metrics_container" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
-              <span id="badge_affinity" class="badge" style="background: #ebf8ff; color: #2b6cb0; font-size: 13px; font-weight: 700; padding: 6px 12px; border: 1px solid #bee3f8;">
+              <span id="badge_affinity" class="badge" style="background: #ebf8ff; color: #2b6cb0; font-size: 13px; font-weight: 700; padding: 6px 12px; border: 1px solid #bee3f8; border-radius: 0;">
                 ΔG: -- kcal/mol
               </span>
-              <span id="badge_pose_num" class="badge" style="background: #edf2f7; color: #4a5568; font-size: 12px; padding: 6px 10px;">
+              <span id="badge_pose_num" class="badge" style="background: #edf2f7; color: #4a5568; font-size: 12px; padding: 6px 10px; border-radius: 0;">
                 Pose 1 / 1
               </span>
-              <span id="badge_rmsd" class="badge" style="background: #edf2f7; color: #4a5568; font-size: 12px; padding: 6px 10px;">
+              <span id="badge_rmsd" class="badge" style="background: #edf2f7; color: #4a5568; font-size: 12px; padding: 6px 10px; border-radius: 0;">
                 RMSD: 0.00 Å
               </span>
-              <span id="badge_le" class="badge" style="background: #def7ec; color: #2f855a; font-size: 12px; padding: 6px 10px; display: none;">
+              <span id="badge_le" class="badge" style="background: #def7ec; color: #2f855a; font-size: 12px; padding: 6px 10px; display: none; border-radius: 0;">
                 LE: --
               </span>
             </div>
@@ -1086,7 +1148,7 @@ def _build_html_template(
           <div style="display: flex; flex-wrap: wrap; gap: 18px; align-items: center; margin-bottom: 12px; padding: 0 2px;">
             <div style="display: flex; align-items: center; gap: 8px;">
               <span style="font-size: 13px; font-weight: 600; color: #718096;">Protein:</span>
-              <div class="style-btn-group" id="protein_style_group">
+              <div class="style-btn-group" id="protein_style_group" style="border-radius: 0;">
                 <button type="button" class="btn btn-sm btn-active" onclick="setProteinStyle('cartoon', this)">Cartoon</button>
                 <button type="button" class="btn btn-sm" onclick="setProteinStyle('surface', this)">Surface</button>
                 <button type="button" class="btn btn-sm" onclick="setProteinStyle('cartoon_surface', this)">Cartoon + Surface</button>
@@ -1098,7 +1160,7 @@ def _build_html_template(
 
             <div style="display: flex; align-items: center; gap: 8px;">
               <span style="font-size: 13px; font-weight: 600; color: #718096;">Ligand:</span>
-              <div class="style-btn-group" id="ligand_style_group">
+              <div class="style-btn-group" id="ligand_style_group" style="border-radius: 0;">
                 <button type="button" class="btn btn-sm btn-active" onclick="setLigandStyle('sticks', this)">Sticks</button>
                 <button type="button" class="btn btn-sm" onclick="setLigandStyle('ball_stick', this)">Ball &amp; Stick</button>
                 <button type="button" class="btn btn-sm" onclick="setLigandStyle('spheres', this)">Spheres</button>
@@ -1107,14 +1169,14 @@ def _build_html_template(
           </div>
 
           <!-- 3Dmol Canvas Container -->
-          <div id="pose3d_viewer" style="height: 520px; width: 100%; position: relative; border-radius: 8px; overflow: hidden; background: #1a202c; border: 1px solid var(--border);"></div>
+          <div id="pose3d_viewer" style="height: 520px; width: 100%; position: relative; border-radius: 0; overflow: hidden; background: #1a202c; border: 1px solid var(--border);"></div>
         </div>
 
         <script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.4.2/3Dmol-min.js"></script>
         <script>
           let glviewer = null;
-          let protModelIdx = -1;
-          let ligModelIdx = -1;
+          let protModel = null;
+          let ligModel = null;
           let surfaceObj = null;
 
           let isDarkMode = true;
@@ -1137,8 +1199,7 @@ def _build_html_template(
             glviewer = $3Dmol.createViewer(container, config);
 
             if (protData && protData.length > 20) {{
-              glviewer.addModel(protData, "pdb");
-              protModelIdx = glviewer.getNumModels() - 1;
+              protModel = glviewer.addModel(protData, "pdb");
             }}
 
             let ligSelect = document.getElementById("ligand_select");
@@ -1161,13 +1222,11 @@ def _build_html_template(
                 let opt = document.createElement("option");
                 opt.textContent = "No docked poses found";
                 ligSelect.appendChild(opt);
+                applyStyles();
+                glviewer.zoomTo();
+                glviewer.render();
               }}
             }}
-
-            applyStyles();
-            setTimeout(function() {{
-              focusLigand();
-            }}, 200);
           }}
 
           function populatePoseSelect(ligName) {{
@@ -1219,15 +1278,14 @@ def _build_html_template(
 
             let pose = ldata.poses[poseIdx];
 
-            if (ligModelIdx >= 0) {{
-              glviewer.removeModel(glviewer.getModel(ligModelIdx));
-              ligModelIdx = -1;
+            if (ligModel !== null) {{
+              glviewer.removeModel(ligModel);
+              ligModel = null;
             }}
 
             if (pose.data && pose.data.length > 20) {{
-              let fmt = pose.format || "pdb";
-              glviewer.addModel(pose.data, fmt);
-              ligModelIdx = glviewer.getNumModels() - 1;
+              let fmt = pose.format || "sdf";
+              ligModel = glviewer.addModel(pose.data, fmt);
             }}
 
             let affBadge = document.getElementById("badge_affinity");
@@ -1274,48 +1332,73 @@ def _build_html_template(
             }}
 
             // 1. Protein styles
-            if (protModelIdx >= 0) {{
+            if (protModel !== null) {{
               let protColor = "spectrum";
-              glviewer.setStyle({{model: protModelIdx}}, {{}});
+              protModel.setStyle({{}}, {{}});
+
               if (currentProtStyle === "cartoon") {{
-                glviewer.setStyle({{model: protModelIdx}}, {{cartoon: {{color: protColor, opacity: 0.85}}}});
+                protModel.setStyle({{}}, {{cartoon: {{color: protColor, opacity: 0.85}}}});
               }} else if (currentProtStyle === "surface") {{
-                glviewer.setStyle({{model: protModelIdx}}, {{}});
+                protModel.setStyle({{}}, {{}});
                 let surfColor = isDarkMode ? "white" : "#cbd5e1";
-                surfaceObj = glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.65, color: surfColor}}, {{model: protModelIdx}});
+                surfaceObj = glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.65, color: surfColor}}, {{model: protModel}});
               }} else if (currentProtStyle === "cartoon_surface") {{
-                glviewer.setStyle({{model: protModelIdx}}, {{cartoon: {{color: protColor, opacity: 0.85}}}});
+                protModel.setStyle({{}}, {{cartoon: {{color: protColor, opacity: 0.85}}}});
                 let surfColor = isDarkMode ? "white" : "#cbd5e1";
-                surfaceObj = glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.35, color: surfColor}}, {{model: protModelIdx}});
+                surfaceObj = glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.35, color: surfColor}}, {{model: protModel}});
               }} else if (currentProtStyle === "sticks") {{
-                glviewer.setStyle({{model: protModelIdx}}, {{stick: {{colorscheme: "amino", radius: 0.16}}, cartoon: {{opacity: 0.2}}}});
+                protModel.setStyle({{}}, {{stick: {{colorscheme: "amino", radius: 0.16}}}});
               }} else if (currentProtStyle === "wireframe") {{
-                glviewer.setStyle({{model: protModelIdx}}, {{line: {{colorscheme: "amino"}}}});
+                protModel.setStyle({{}}, {{line: {{colorscheme: "amino"}}}});
               }} else if (currentProtStyle === "off") {{
-                glviewer.setStyle({{model: protModelIdx}}, {{}});
+                protModel.setStyle({{}}, {{}});
               }}
 
               // Highlight pocket residues within 5Å of ligand
-              if (showPocketResidues && ligModelIdx >= 0 && currentProtStyle !== "off" && currentProtStyle !== "sticks") {{
-                glviewer.setStyle(
-                  {{model: protModelIdx, within: {{distance: 5.0, sel: {{model: ligModelIdx}}}}}},
-                  {{stick: {{colorscheme: "amino", radius: 0.22}}, cartoon: {{opacity: 0.5}}}}
-                );
+              if (showPocketResidues && ligModel !== null && currentProtStyle !== "off" && currentProtStyle !== "sticks") {{
+                let ligAtoms = ligModel.selectedAtoms({{}});
+                let protAtoms = protModel.selectedAtoms({{}});
+                if (ligAtoms && ligAtoms.length > 0 && protAtoms && protAtoms.length > 0) {{
+                  let pocketResis = new Set();
+                  for (let i = 0; i < ligAtoms.length; i++) {{
+                    let la = ligAtoms[i];
+                    for (let j = 0; j < protAtoms.length; j++) {{
+                      let pa = protAtoms[j];
+                      let dx = la.x - pa.x;
+                      if (dx > 5.0 || dx < -5.0) continue;
+                      let dy = la.y - pa.y;
+                      if (dy > 5.0 || dy < -5.0) continue;
+                      let dz = la.z - pa.z;
+                      if (dz > 5.0 || dz < -5.0) continue;
+                      if (dx * dx + dy * dy + dz * dz <= 25.0) {{
+                        pocketResis.add(pa.resi);
+                      }}
+                    }}
+                  }}
+                  if (pocketResis.size > 0) {{
+                    let resiList = Array.from(pocketResis);
+                    protModel.setStyle(
+                      {{resi: resiList}},
+                      {{stick: {{colorscheme: "amino", radius: 0.22}}, cartoon: {{color: protColor, opacity: 0.6}}}}
+                    );
+                  }}
+                }}
               }}
             }}
 
             // 2. Ligand styles
-            if (ligModelIdx >= 0) {{
+            if (ligModel !== null) {{
               let carbonScheme = "greenCarbon";
+              ligModel.setStyle({{}}, {{}});
               if (currentLigStyle === "sticks") {{
-                glviewer.setStyle({{model: ligModelIdx}}, {{stick: {{colorscheme: carbonScheme, radius: 0.28}}}});
+                ligModel.setStyle({{}}, {{stick: {{colorscheme: carbonScheme, radius: 0.28}}}});
               }} else if (currentLigStyle === "ball_stick") {{
-                glviewer.setStyle({{model: ligModelIdx}}, {{
-                  stick: {{colorscheme: carbonScheme, radius: 0.22}},
-                  sphere: {{radius: 0.42, colorscheme: carbonScheme}}
+                ligModel.setStyle({{}}, {{
+                  stick: {{colorscheme: carbonScheme, radius: 0.20}},
+                  sphere: {{radius: 0.45, colorscheme: carbonScheme}}
                 }});
               }} else if (currentLigStyle === "spheres") {{
-                glviewer.setStyle({{model: ligModelIdx}}, {{sphere: {{colorscheme: carbonScheme}}}});
+                ligModel.setStyle({{}}, {{sphere: {{colorscheme: carbonScheme}}}});
               }}
             }}
 
@@ -1325,7 +1408,9 @@ def _build_html_template(
           function setProteinStyle(styleName, btn) {{
             currentProtStyle = styleName;
             if (btn && btn.parentElement) {{
-              btn.parentElement.querySelectorAll(".btn").forEach(b => b.classList.remove("btn-active"));
+              btn.parentElement.querySelectorAll(".btn").forEach(function(b) {{
+                b.classList.remove("btn-active");
+              }});
               btn.classList.add("btn-active");
             }}
             applyStyles();
@@ -1334,7 +1419,9 @@ def _build_html_template(
           function setLigandStyle(styleName, btn) {{
             currentLigStyle = styleName;
             if (btn && btn.parentElement) {{
-              btn.parentElement.querySelectorAll(".btn").forEach(b => b.classList.remove("btn-active"));
+              btn.parentElement.querySelectorAll(".btn").forEach(function(b) {{
+                b.classList.remove("btn-active");
+              }});
               btn.classList.add("btn-active");
             }}
             applyStyles();
@@ -1365,10 +1452,10 @@ def _build_html_template(
 
           function focusLigand() {{
             if (!glviewer) return;
-            if (ligModelIdx >= 0) {{
-              glviewer.zoomTo({{model: ligModelIdx}}, 400);
-            }} else if (protModelIdx >= 0) {{
-              glviewer.zoomTo({{model: protModelIdx}}, 400);
+            if (ligModel !== null) {{
+              glviewer.zoomTo({{model: ligModel}}, 400);
+            }} else if (protModel !== null) {{
+              glviewer.zoomTo({{model: protModel}}, 400);
             }} else {{
               glviewer.zoomTo();
             }}
@@ -1408,7 +1495,12 @@ def _build_html_template(
       --text: #2d3748;
       --border: #e2e8f0;
     }}
-    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    *, *::before, *::after {{
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      border-radius: 0 !important;
+    }}
     body {{
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       background-color: var(--bg);
@@ -1423,7 +1515,7 @@ def _build_html_template(
     header {{
       background: var(--card-bg);
       padding: 24px 32px;
-      border-radius: 12px;
+      border-radius: 0;
       box-shadow: 0 1px 3px rgba(0,0,0,0.06);
       margin-bottom: 24px;
       display: flex;
@@ -1437,10 +1529,11 @@ def _build_html_template(
     .badge {{
       display: inline-block;
       padding: 4px 10px;
-      border-radius: 9999px;
+      border-radius: 0;
       font-size: 12px;
-      font-weight: 600;
+      font-weight: 700;
       text-transform: uppercase;
+      letter-spacing: 0.5px;
     }}
     .badge-primary {{ background: var(--primary-light); color: var(--primary); }}
     .badge-success {{ background: #def7ec; color: var(--success); }}
@@ -1456,7 +1549,7 @@ def _build_html_template(
     .kpi-card {{
       background: var(--card-bg);
       padding: 20px;
-      border-radius: 10px;
+      border-radius: 0;
       border: 1px solid var(--border);
       box-shadow: 0 1px 2px rgba(0,0,0,0.04);
     }}
@@ -1467,7 +1560,7 @@ def _build_html_template(
     .card {{
       background: var(--card-bg);
       padding: 24px;
-      border-radius: 12px;
+      border-radius: 0;
       border: 1px solid var(--border);
       box-shadow: 0 1px 3px rgba(0,0,0,0.05);
       margin-bottom: 24px;
@@ -1484,7 +1577,7 @@ def _build_html_template(
     .chart-box {{
       background: var(--card-bg);
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 0;
       padding: 14px;
       min-width: 0;
       overflow: hidden;
@@ -1522,7 +1615,7 @@ def _build_html_template(
       color: #2d3748;
       border: 1px solid var(--border);
       padding: 8px 14px;
-      border-radius: 6px;
+      border-radius: 0;
       font-size: 13px;
       font-weight: 600;
       cursor: pointer;
@@ -1541,7 +1634,7 @@ def _build_html_template(
     }}
     .style-btn-group {{
       display: inline-flex;
-      border-radius: 6px;
+      border-radius: 0;
       overflow: hidden;
       border: 1px solid var(--border);
     }}
