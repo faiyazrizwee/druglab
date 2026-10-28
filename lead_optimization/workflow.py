@@ -309,4 +309,12 @@ def run_lead_optimization(
     except Exception as e:
         logger.error(f"Failed to print summary: {e}")
 
+    # Generate standalone interactive HTML report
+    try:
+        from reports.generator import generate_report
+        proj_name = getattr(config.project, "name", "Optimization") if hasattr(config, "project") else "Optimization"
+        generate_report(output_dir=output_dir, report_title=f"DrugLab Lead Optimization Report — {proj_name}")
+    except Exception as report_err:
+        logger.warning(f"HTML report generation failed: {report_err}")
+
     return results

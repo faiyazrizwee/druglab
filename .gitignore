@@ -41,17 +41,12 @@ venv.bak/
 # DrugLab specific generated output directories
 output/
 result/
-reports/
+results/
 res/
-ligands/
-ligands1/
-protein/
-
 
 # Testing/temporary data folders and files
 test_lead_opt/
 test_docking.csv
-tests/
 test_interactive.py
 test_interactive2.py
 test_lead_opt.py

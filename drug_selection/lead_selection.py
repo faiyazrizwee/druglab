@@ -27,6 +27,8 @@ from utils.chemistry import (
     get_mol_name,
     compute_tanimoto_similarity,
     deduplicate_mols,
+    calculate_ligand_efficiency,
+    calculate_lipophilic_efficiency,
 )
 
 logger = setup_logger("lead_selection", level="INFO")
@@ -192,6 +194,27 @@ def select_leads(
                                if c not in merged.columns and c != "name"]
         dl_subset = dl_df[dl_cols].drop_duplicates(subset=["name"])
         merged = merged.merge(dl_subset, on="name", how="left")
+
+    # Compute Ligand Efficiency (LE) and Lipophilic Efficiency (LLE / LipE)
+    if "best_affinity" in merged.columns:
+        if "HeavyAtoms" in merged.columns:
+            merged["ligand_efficiency"] = merged.apply(
+                lambda r: calculate_ligand_efficiency(r["best_affinity"], int(r["HeavyAtoms"]))
+                if pd.notnull(r.get("HeavyAtoms")) and r.get("HeavyAtoms") > 0 else np.nan,
+                axis=1
+            )
+        elif "MW" in merged.columns:
+            merged["ligand_efficiency"] = merged.apply(
+                lambda r: calculate_ligand_efficiency(r["best_affinity"], max(1, int(r["MW"] / 13.5)))
+                if pd.notnull(r.get("MW")) else np.nan,
+                axis=1
+            )
+        if "LogP" in merged.columns:
+            merged["lipophilic_efficiency"] = merged.apply(
+                lambda r: calculate_lipophilic_efficiency(r["best_affinity"], float(r["LogP"]))
+                if pd.notnull(r.get("LogP")) else np.nan,
+                axis=1
+            )
 
     # Compute composite scores
     if scoring_method == "weighted_sum":

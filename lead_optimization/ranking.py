@@ -22,7 +22,12 @@ from utils.io import (
     read_csv,
     validate_file_exists,
 )
-from utils.chemistry import get_mol_name, compute_tanimoto_similarity
+from utils.chemistry import (
+    get_mol_name,
+    compute_tanimoto_similarity,
+    calculate_ligand_efficiency,
+    calculate_lipophilic_efficiency,
+)
 
 logger = setup_logger("optimization_ranking", level="INFO")
 
@@ -101,6 +106,27 @@ def rank_candidates(
 
     # Compute scores
     merged = _compute_scores(merged, weights)
+
+    # Compute Ligand Efficiency (LE) and Lipophilic Efficiency (LLE / LipE)
+    if "best_affinity" in merged.columns:
+        if "HeavyAtoms" in merged.columns:
+            merged["ligand_efficiency"] = merged.apply(
+                lambda r: calculate_ligand_efficiency(r["best_affinity"], int(r["HeavyAtoms"]))
+                if pd.notnull(r.get("HeavyAtoms")) and r.get("HeavyAtoms") > 0 else np.nan,
+                axis=1
+            )
+        elif "MW" in merged.columns:
+            merged["ligand_efficiency"] = merged.apply(
+                lambda r: calculate_ligand_efficiency(r["best_affinity"], max(1, int(r["MW"] / 13.5)))
+                if pd.notnull(r.get("MW")) else np.nan,
+                axis=1
+            )
+        if "LogP" in merged.columns:
+            merged["lipophilic_efficiency"] = merged.apply(
+                lambda r: calculate_lipophilic_efficiency(r["best_affinity"], float(r["LogP"]))
+                if pd.notnull(r.get("LogP")) else np.nan,
+                axis=1
+            )
 
     # Compare to lead if available
     if lead_sdf and os.path.isfile(lead_sdf):

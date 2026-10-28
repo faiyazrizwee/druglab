@@ -51,6 +51,8 @@ def main():
     _add_screen_subcommand(subparsers)
     _add_dock_subcommand(subparsers)
     _add_select_subcommand(subparsers)
+    _add_report_subcommand(subparsers)
+    _add_fetch_subcommand(subparsers)
 
     args = parser.parse_args()
 
@@ -90,8 +92,8 @@ def _add_run_subcommand(subparsers):
         "run",
         help="Run full drug selection pipeline",
     )
-    run_parser.add_argument("--protein", required=True, help="Input protein PDB file")
-    run_parser.add_argument("--library", required=True, help="Ligand library (SDF or directory)")
+    run_parser.add_argument("--protein", default=None, help="Input protein PDB file or 4-letter PDB ID (e.g. 7DTD)")
+    run_parser.add_argument("--library", default=None, help="Ligand library (SDF, directory, or compound name)")
     run_parser.add_argument("--output-dir", default="results", help="Output directory")
     run_parser.add_argument("--config", default=None, help="Path to YAML config file")
     run_parser.add_argument("--stop-after", default=None,
@@ -108,10 +110,96 @@ def _handle_run(args):
 
     print_banner()
 
+    protein = args.protein
+    library = args.library
+
+    # 1. Interactive prompt if protein is not provided
+    if not protein:
+        print("\nProvide protein target:")
+        print("  [1] Enter local PDB file path")
+        print("  [2] Download from RCSB PDB by ID (e.g. 7DTD, 4MZI, 6LU7)")
+        try:
+            choice = input("Choice [1]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.")
+            return
+
+        if choice == "2":
+            try:
+                pdb_id = input("Enter 4-character RCSB PDB ID: ").strip().upper()
+                from utils.fetch import fetch_pdb
+                protein = fetch_pdb(pdb_id, os.path.join("protein", f"{pdb_id}.pdb"))
+            except (EOFError, KeyboardInterrupt):
+                print("\nCancelled.")
+                return
+        else:
+            default_hint = " [default: protein/7DTD.pdb]" if os.path.isfile("protein/7DTD.pdb") else ""
+            try:
+                p = input(f"Protein PDB file path{default_hint}: ").strip()
+                protein = p if p else "protein/7DTD.pdb"
+            except (EOFError, KeyboardInterrupt):
+                print("\nCancelled.")
+                return
+
+    # Auto-fetch if 4-character PDB ID passed directly
+    if protein and not os.path.isfile(protein) and len(protein.strip()) == 4 and protein.strip().isalnum():
+        print(f"Target '{protein}' appears to be a PDB ID. Fetching from RCSB PDB...")
+        from utils.fetch import fetch_pdb
+        try:
+            protein = fetch_pdb(protein.strip().upper(), os.path.join("protein", f"{protein.strip().upper()}.pdb"))
+        except Exception as e:
+            print(f"Failed to fetch PDB {protein}: {e}")
+
+    # 2. Interactive prompt if library is not provided
+    if not library:
+        print("\nProvide ligand library:")
+        print("  [1] Enter local SDF file or directory")
+        print("  [2] Download compound from PubChem by name (e.g. apigenin, quercetin, aspirin)")
+        print("  [3] Download compound from PubChem by CID")
+        try:
+            choice = input("Choice [1]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.")
+            return
+
+        if choice == "2":
+            try:
+                name = input("Enter compound name: ").strip()
+                from utils.fetch import fetch_ligand_by_name
+                library = fetch_ligand_by_name(name, os.path.join("ligands", f"{name.lower().replace(' ', '_')}.sdf"))
+            except (EOFError, KeyboardInterrupt):
+                print("\nCancelled.")
+                return
+        elif choice == "3":
+            try:
+                cid = input("Enter PubChem CID: ").strip()
+                from utils.fetch import fetch_ligand_by_cid
+                library = fetch_ligand_by_cid(cid, os.path.join("ligands", f"CID_{cid}.sdf"))
+            except (EOFError, KeyboardInterrupt):
+                print("\nCancelled.")
+                return
+        else:
+            default_hint = " [default: ligands/]" if os.path.isdir("ligands") else ""
+            try:
+                lib = input(f"Ligand file or directory path{default_hint}: ").strip()
+                library = lib if lib else "ligands"
+            except (EOFError, KeyboardInterrupt):
+                print("\nCancelled.")
+                return
+
+    # Auto-fetch if compound name passed directly and doesn't exist locally
+    if library and not os.path.exists(library):
+        print(f"Library '{library}' not found locally. Attempting to fetch from PubChem...")
+        from utils.fetch import fetch_ligand_by_name
+        try:
+            library = fetch_ligand_by_name(library, os.path.join("ligands", f"{library.lower().replace(' ', '_')}.sdf"))
+        except Exception as e:
+            print(f"Failed to fetch from PubChem: {e}")
+
     config = load_config(config_path=args.config)
     run_drug_selection(
-        protein_pdb=args.protein,
-        ligand_library=args.library,
+        protein_pdb=protein,
+        ligand_library=library,
         output_dir=args.output_dir,
         config=config,
         stop_after=args.stop_after,
@@ -381,6 +469,65 @@ def _handle_select(args):
         top_n=args.top_n,
         scoring_method=args.scoring,
     )
+
+
+# ── report ──
+
+def _add_report_subcommand(subparsers):
+    rep_parser = subparsers.add_parser("report", help="Generate standalone interactive HTML report")
+    rep_parser.add_argument("--input", required=True, help="Path to DrugLab output directory")
+    rep_parser.add_argument("--output", default=None, help="Custom path for HTML report")
+    rep_parser.add_argument("--title", default="DrugLab Virtual Screening & Optimization Report", help="Report title")
+    rep_parser.set_defaults(handler=_handle_report)
+
+
+def _handle_report(args):
+    from reports.generator import generate_report
+    path = generate_report(output_dir=args.input, output_file=args.output, report_title=args.title)
+    print(f"Report generated successfully: {path}")
+
+
+# ── fetch ──
+
+def _add_fetch_subcommand(subparsers):
+    fetch_parser = subparsers.add_parser("fetch", help="Download PDB structures or PubChem ligands")
+    fetch_sub = fetch_parser.add_subparsers(dest="fetch_type")
+
+    # fetch pdb
+    pdb_parser = fetch_sub.add_parser("pdb", help="Fetch PDB from RCSB")
+    pdb_parser.add_argument("id", help="4-character PDB ID (e.g. 7DTD, 4MZI)")
+    pdb_parser.add_argument("--output", default=None, help="Destination file path")
+    pdb_parser.set_defaults(handler=_handle_fetch_pdb)
+
+    # fetch ligand
+    lig_parser = fetch_sub.add_parser("ligand", help="Fetch ligand SDF by name from PubChem")
+    lig_parser.add_argument("name", help="Compound name (e.g. apigenin, quercetin)")
+    lig_parser.add_argument("--output", default=None, help="Destination SDF file path")
+    lig_parser.set_defaults(handler=_handle_fetch_ligand)
+
+    # fetch cid
+    cid_parser = fetch_sub.add_parser("cid", help="Fetch ligand SDF by PubChem CID")
+    cid_parser.add_argument("cid", help="PubChem CID number")
+    cid_parser.add_argument("--output", default=None, help="Destination SDF file path")
+    cid_parser.set_defaults(handler=_handle_fetch_cid)
+
+
+def _handle_fetch_pdb(args):
+    from utils.fetch import fetch_pdb
+    out = fetch_pdb(pdb_id=args.id, output_path=args.output)
+    print(f"Downloaded PDB structure to: {out}")
+
+
+def _handle_fetch_ligand(args):
+    from utils.fetch import fetch_ligand_by_name
+    out = fetch_ligand_by_name(name=args.name, output_path=args.output)
+    print(f"Downloaded ligand SDF to: {out}")
+
+
+def _handle_fetch_cid(args):
+    from utils.fetch import fetch_ligand_by_cid
+    out = fetch_ligand_by_cid(cid=args.cid, output_path=args.output)
+    print(f"Downloaded ligand SDF to: {out}")
 
 
 # ══════════════════════════════════════════════════════════════

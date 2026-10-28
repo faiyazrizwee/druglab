@@ -211,12 +211,12 @@ def run_drug_selection(
                 if not os.path.exists(ligands_sdf):
                     ligands_sdf = _get_latest_ligands_sdf(ctx, output_dir)
                     
-                docking_box = ctx["docking_box"]
+                docking_box = ctx.get("docking_box")
                 if not docking_box:
                     docking_box = os.path.join(
                         output_dir, "pocket_detection", "docking_box.json"
                     )
-                if not os.path.exists(docking_box) and isinstance(docking_box, str):
+                if isinstance(docking_box, str) and not os.path.exists(docking_box):
                     print("\n[!] Pocket detection was skipped or docking_box.json is missing.")
                     from core.workflow_engine import WorkflowEngine
                     engine = WorkflowEngine()
@@ -275,6 +275,7 @@ def run_drug_selection(
                     scoring_method=config.lead_selection.scoring_method,
                     weights=config.lead_selection.weights,
                     affinity_cutoff=config.lead_selection.affinity_cutoff,
+                    on_no_hits=getattr(config.lead_selection, "on_no_hits", "fallback"),
                     diversity_filter=config.lead_selection.diversity_filter,
                     similarity_cutoff=config.lead_selection.similarity_cutoff,
                 )
@@ -349,6 +350,14 @@ def run_drug_selection(
     reports_dir = os.path.join(output_dir, "reports")
     ensure_dir(reports_dir)
     write_json(validation_report, os.path.join(reports_dir, "scientific_validation.json"))
+
+    # Generate standalone interactive HTML report
+    try:
+        from reports.generator import generate_report
+        proj_name = getattr(config.project, "name", "Run") if hasattr(config, "project") else "Run"
+        generate_report(output_dir=output_dir, report_title=f"DrugLab Screening Report — {proj_name}")
+    except Exception as report_err:
+        logger.warning(f"HTML report generation failed: {report_err}")
 
     return results
 

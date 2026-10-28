@@ -242,7 +242,34 @@ python druglab.py run \
 
 ### Reports & Output Data
 
-Reports (such as `docking_report.json` and `lead_selection_report.json`) are automatically saved as JSON files in their respective output subdirectories. A unified HTML report generator CLI is planned for v0.2.
+DrugLab automatically compiles a comprehensive, standalone interactive HTML report (`reports/summary.html`) along with structured JSON/CSV metrics:
+
+- **Executive KPI Scorecard** — Compound attrition funnel, hit rates, best affinity
+- **Interactive Top Leads Table** — Searchable table with inline 2D vector (SVG) structures
+- **Embedded 3D Pose Viewer** — Powered by [3Dmol.js](https://3dmol.csb.pitt.edu/) (py3Dmol) to inspect active site poses and protein cartoon structures directly in the browser
+- **Medicinal Chemistry Analytics** — Plotly charts for affinity distributions, chemical space (MW vs. cLogP), and multi-parameter radar profiles
+- **Fault-Tolerant Quarantine Audit** — Details any malformed compounds captured in `quarantine.json` without failing the pipeline
+
+Generate or re-generate reports anytime from an existing run:
+
+```bash
+druglab report --input output/
+```
+
+#### Structure & Ligand Retrieval
+
+Download experimental target structures from RCSB PDB or compound libraries from PubChem:
+
+```bash
+# Fetch target PDB by accession ID
+druglab fetch pdb 7DTD --output protein/7DTD.pdb
+
+# Fetch ligand SDF by compound name
+druglab fetch ligand "apigenin" --output ligands/apigenin.sdf
+
+# Fetch ligand SDF by PubChem CID
+druglab fetch cid 5280443 --output ligands/apigenin.sdf
+```
 
 ### Configuration
 
@@ -430,23 +457,25 @@ pytest tests/ --cov=core --cov=drug_selection --cov=lead_optimization --cov-repo
 
 ## Roadmap
 
-### Current (v0.1)
-- [x] Project structure
-- [x] Core computational modules
-- [x] Drug Selection workflow
-- [x] Lead Optimization workflow
-- [x] CLI interface
-- [ ] Report generation (JSON reports completed, HTML generator planned)
-- [x] Test suite
+### Current (v0.2)
+- [x] Project structure & modular DAG execution engine
+- [x] Core computational modules (protein prep, ligand prep, pocket detection, docking)
+- [x] Drug Selection & Lead Optimization workflows
+- [x] Standalone interactive HTML report generator (py3Dmol 3D pose viewer + Plotly)
+- [x] Medicinal chemistry metrics (Synthetic Accessibility SAScore, LE, LLE/LipE)
+- [x] Resilient batch error handling with `quarantine.json` logger
+- [x] Dual-layer test suite (fast unit tests + miniature e2e integration)
+- [x] Data retrieval CLI (`druglab fetch` for RCSB PDB & PubChem)
+- [x] Modern `pyproject.toml` packaging & GitHub Actions CI
 
-### Planned (v0.2+)
+### Planned (v0.3+)
 - [ ] DeepChem / Chemprop ADMET backends
 - [ ] ChemBERTa / MolFormer property prediction
 - [ ] Molecular Dynamics refinement (OpenMM)
 - [ ] MM/GBSA binding free energy rescoring
 - [ ] Pharmacophore modeling
 - [ ] QSAR model training
-- [ ] Batch processing for large libraries
+- [ ] Distributed batch processing for massive chemical libraries
 
 ---
 

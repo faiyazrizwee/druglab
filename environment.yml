@@ -18,6 +18,8 @@ dependencies:
   - scipy
   - seaborn
   - vina
+  - pytest
+  - pytest-cov
   - pip
 
   - pip:

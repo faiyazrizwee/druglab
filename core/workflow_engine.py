@@ -469,7 +469,23 @@ class WorkflowEngine:
                     return None
                 continue
 
-            # Special handler for lead optimization removed as it uses standard prompts now
+            # Special handler for protein target (Download or Local Path)
+            if ctx_key in ("protein_pdb", "protein_file"):
+                if ctx_key in context:
+                    continue
+                result = self._collect_protein_input(context, ctx_key)
+                if result is None:
+                    return None
+                continue
+
+            # Special handler for ligand library (Download or Local Path)
+            if ctx_key in ("ligand_library", "ligand_file"):
+                if ctx_key in context:
+                    continue
+                result = self._collect_ligand_input(context, ctx_key)
+                if result is None:
+                    return None
+                continue
 
             # Skip if already populated by a previous module's collection
             if ctx_key in context:
@@ -518,6 +534,186 @@ class WorkflowEngine:
                 break
 
         return context
+
+    def _collect_protein_input(self, context: dict, ctx_key: str = "protein_pdb") -> str | None:
+        """
+        Interactively collect protein input: allow local path or download from RCSB PDB.
+        """
+        print()
+        print("Provide protein target:")
+        print("  [1] Enter local PDB file path")
+        print("  [2] Download from RCSB PDB by ID (e.g. 7DTD, 4MZI, 6LU7)")
+        print("Choice [1]: ", end="", flush=True)
+        try:
+            choice = input().strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.")
+            return None
+
+        if choice == "2":
+            while True:
+                print("Enter 4-character RCSB PDB ID: ", end="", flush=True)
+                try:
+                    pdb_id = input().strip().upper()
+                except (EOFError, KeyboardInterrupt):
+                    print("\nCancelled.")
+                    return None
+                if not pdb_id:
+                    print("  [!] PDB ID is required.")
+                    continue
+                try:
+                    from utils.fetch import fetch_pdb
+                    dest_file = os.path.join("protein", f"{pdb_id}.pdb")
+                    path = fetch_pdb(pdb_id, dest_file)
+                    print(f"  ✓ Downloaded PDB structure to: {path}")
+                    context[ctx_key] = path
+                    return path
+                except Exception as e:
+                    print(f"  [!] Failed to download PDB {pdb_id}: {e}")
+                    print("      Please try another ID or choose local file.")
+                    return self._collect_protein_input(context, ctx_key)
+        else:
+            default_hint = ""
+            if os.path.isfile("protein/7DTD.pdb"):
+                default_hint = " [default: protein/7DTD.pdb]"
+            while True:
+                print(f"Protein PDB file path{default_hint}: ", end="", flush=True)
+                try:
+                    path = input().strip()
+                except (EOFError, KeyboardInterrupt):
+                    print("\nCancelled.")
+                    return None
+                if not path and default_hint:
+                    path = "protein/7DTD.pdb"
+                if not path:
+                    print("  [!] Path is required.")
+                    continue
+
+                path = os.path.normpath(path)
+                if not os.path.isfile(path):
+                    if len(path) == 4 and path.isalnum():
+                        print(f"  Local file '{path}' not found. Download PDB '{path.upper()}' from RCSB? [Y/n]: ", end="", flush=True)
+                        try:
+                            dl_choice = input().strip().lower()
+                        except (EOFError, KeyboardInterrupt):
+                            dl_choice = "n"
+                        if dl_choice not in ("n", "no"):
+                            try:
+                                from utils.fetch import fetch_pdb
+                                dest_file = os.path.join("protein", f"{path.upper()}.pdb")
+                                p = fetch_pdb(path.upper(), dest_file)
+                                print(f"  ✓ Downloaded PDB structure to: {p}")
+                                context[ctx_key] = p
+                                return p
+                            except Exception as dl_err:
+                                print(f"  [!] Download failed: {dl_err}")
+                    print(f"  [!] File not found: {path}. Please check path and try again.")
+                    continue
+
+                context[ctx_key] = path
+                return path
+
+    def _collect_ligand_input(self, context: dict, ctx_key: str = "ligand_library") -> str | None:
+        """
+        Interactively collect ligand input: allow local path or download from PubChem.
+        """
+        print()
+        print("Provide ligand library:")
+        print("  [1] Enter local SDF file or directory")
+        print("  [2] Download compound from PubChem by name (e.g. apigenin, quercetin, aspirin)")
+        print("  [3] Download compound from PubChem by CID")
+        print("Choice [1]: ", end="", flush=True)
+        try:
+            choice = input().strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.")
+            return None
+
+        if choice == "2":
+            while True:
+                print("Enter compound name: ", end="", flush=True)
+                try:
+                    name = input().strip()
+                except (EOFError, KeyboardInterrupt):
+                    print("\nCancelled.")
+                    return None
+                if not name:
+                    print("  [!] Compound name is required.")
+                    continue
+                try:
+                    from utils.fetch import fetch_ligand_by_name
+                    safe_name = name.lower().replace(" ", "_")
+                    dest_file = os.path.join("ligands", f"{safe_name}.sdf")
+                    path = fetch_ligand_by_name(name, dest_file)
+                    print(f"  ✓ Downloaded ligand to: {path}")
+                    context[ctx_key] = path
+                    return path
+                except Exception as e:
+                    print(f"  [!] Failed to download ligand '{name}': {e}")
+                    return self._collect_ligand_input(context, ctx_key)
+
+        elif choice == "3":
+            while True:
+                print("Enter PubChem CID: ", end="", flush=True)
+                try:
+                    cid = input().strip()
+                except (EOFError, KeyboardInterrupt):
+                    print("\nCancelled.")
+                    return None
+                if not cid:
+                    print("  [!] CID is required.")
+                    continue
+                try:
+                    from utils.fetch import fetch_ligand_by_cid
+                    dest_file = os.path.join("ligands", f"CID_{cid}.sdf")
+                    path = fetch_ligand_by_cid(cid, dest_file)
+                    print(f"  ✓ Downloaded ligand to: {path}")
+                    context[ctx_key] = path
+                    return path
+                except Exception as e:
+                    print(f"  [!] Failed to download CID '{cid}': {e}")
+                    return self._collect_ligand_input(context, ctx_key)
+
+        else:
+            default_hint = ""
+            if os.path.isdir("ligands"):
+                default_hint = " [default: ligands/]"
+            while True:
+                print(f"Ligand file or directory path{default_hint}: ", end="", flush=True)
+                try:
+                    path = input().strip()
+                except (EOFError, KeyboardInterrupt):
+                    print("\nCancelled.")
+                    return None
+                if not path and default_hint:
+                    path = "ligands"
+                if not path:
+                    print("  [!] Path is required.")
+                    continue
+
+                path = os.path.normpath(path)
+                if not os.path.isfile(path) and not os.path.isdir(path):
+                    print(f"  Local path '{path}' not found. Download '{path}' from PubChem? [Y/n]: ", end="", flush=True)
+                    try:
+                        dl_choice = input().strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        dl_choice = "n"
+                    if dl_choice not in ("n", "no"):
+                        try:
+                            from utils.fetch import fetch_ligand_by_name
+                            safe_name = path.lower().replace(" ", "_")
+                            dest_file = os.path.join("ligands", f"{safe_name}.sdf")
+                            p = fetch_ligand_by_name(path, dest_file)
+                            print(f"  ✓ Downloaded ligand to: {p}")
+                            context[ctx_key] = p
+                            return p
+                        except Exception as dl_err:
+                            print(f"  [!] Download failed: {dl_err}")
+                    print(f"  [!] File or directory not found: {path}. Please try again.")
+                    continue
+
+                context[ctx_key] = path
+                return path
 
     def _collect_docking_pocket(self, context: dict) -> dict | None:
         """
@@ -808,43 +1004,138 @@ class WorkflowEngine:
 
     def run_interactive(self, config: DrugLabConfig | None = None) -> dict | None:
         """
-        Run the interactive workflow menu.
+        Run the interactive workflow menu with Rich styling, presets, and utilities.
 
         Returns results dict or None if user exits.
         """
         from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
 
         console = Console()
 
-        print("==================================")
-        print("DrugLab Workflow Builder")
-        print("==================================")
-        print()
-        print("Select workflow steps:")
-        print()
+        banner_text = (
+            "[bold cyan]🧬 DrugLab[/bold cyan] — [white]Computational Drug Discovery Platform[/white]\n"
+            "[dim]A lightweight platform for virtual screening, docking, ADMET & lead optimization[/dim]"
+        )
+        console.print()
+        console.print(Panel(banner_text, border_style="cyan", padding=(0, 2)))
+
+        table = Table(title="Select Workflow or Computational Modules", border_style="dim", show_header=True, header_style="bold cyan")
+        table.add_column("Option", style="bold yellow", width=10, justify="center")
+        table.add_column("Category", style="bold magenta", width=12)
+        table.add_column("Workflow / Module Name", style="bold white", width=28)
+        table.add_column("Description", style="dim", width=46)
+
+        # Presets
+        table.add_row("[A]", "Pipeline", "Complete Virtual Screening", "Steps 1–7: Protein Prep → ADMET → Docking → Leads")
+        table.add_row("[B]", "Pipeline", "Lead Optimization", "Step 8: Bioisostere, scaffold hop, SAScore & ranking")
+        table.add_row("[C]", "Custom", "Custom Module Range", "Run selected step range (e.g. 1-4, or 1,2,6)")
+        table.add_section()
+
+        # Modules
+        module_descriptions = {
+            1: "Clean PDB, add hydrogens, repair atoms & PDBQT",
+            2: "Conformer generation, energy minimization & PDBQT",
+            3: "Geometric cavity detection & AutoDock Vina box",
+            4: "Lipinski, Veber, Ghose, PAINS structural alerts",
+            5: "ADMET-AI predictions (BBB, toxicity, metabolism)",
+            6: "AutoDock Vina binding affinity calculation",
+            7: "Multi-criteria ranking with LE & LipE metrics",
+            8: "Analogue generation, SAScore filtering & optimization",
+        }
+
         for i in range(1, 9):
             node = self.get_module_by_menu_id(i)
             if node:
-                print(f"[{i}] {node.display_name}")
-        print("[9] Exit")
-        print()
+                desc = module_descriptions.get(i, "")
+                table.add_row(f"[{i}]", "Module", node.display_name, desc)
+
+        table.add_section()
+        table.add_row("[R]", "Utility", "Generate HTML Report", "Create standalone interactive report from output/")
+        table.add_row("[F]", "Utility", "Fetch PDB / PubChem", "Download PDB from RCSB or ligand from PubChem")
+        table.add_row("[Q]", "System", "Exit", "Quit DrugLab")
+
+        console.print(table)
+        console.print()
+
         try:
-            selection_str = input("Selection: ").strip()
+            selection_raw = input("Selection [default: A (Complete Screening)]: ").strip()
         except (EOFError, KeyboardInterrupt):
-            console.print("\n[dim]Exiting.[/dim]")
+            console.print("\n[dim]Exiting DrugLab.[/dim]")
             return None
-        if not selection_str:
-            console.print("[yellow]No selection made.[/yellow]")
+
+        choice = selection_raw.upper() if selection_raw else "A"
+
+        # Handle Utilities & Exits
+        if choice in ("Q", "9", "EXIT", "QUIT"):
+            console.print("[dim]Exiting DrugLab. Happy discovery![/dim]")
             return None
-        selection_str = selection_str.replace(",", " ")
-        try:
-            selections = [int(x) for x in selection_str.split()]
-        except ValueError:
-            console.print("[red]Invalid input. Enter numbers separated by spaces or commas.[/red]")
+
+        if choice in ("R", "REPORT"):
+            print()
+            try:
+                rep_dir = input("Enter output directory with results [output]: ").strip() or "output"
+            except (EOFError, KeyboardInterrupt):
+                return None
+            try:
+                from reports.generator import generate_report
+                path = generate_report(output_dir=rep_dir)
+                console.print(f"\n[bold green]✓ Standalone HTML report generated successfully:[/bold green] [underline]{path}[/underline]\n")
+            except Exception as rep_err:
+                console.print(f"[bold red]Failed to generate report:[/bold red] {rep_err}")
             return None
-        if 9 in selections:
-            console.print("[dim]Exiting.[/dim]")
+
+        if choice in ("F", "FETCH"):
+            print()
+            print("What would you like to fetch?")
+            print("  [1] Download PDB structure from RCSB PDB")
+            print("  [2] Download chemical ligand SDF from PubChem by name")
+            print("  [3] Download chemical ligand SDF from PubChem by CID")
+            try:
+                f_type = input("Choice [1]: ").strip() or "1"
+            except (EOFError, KeyboardInterrupt):
+                return None
+            if f_type == "2":
+                name = input("Enter compound name (e.g. apigenin): ").strip()
+                if name:
+                    from utils.fetch import fetch_ligand_by_name
+                    p = fetch_ligand_by_name(name)
+                    console.print(f"[bold green]✓ Downloaded ligand to:[/bold green] {p}")
+            elif f_type == "3":
+                cid = input("Enter PubChem CID: ").strip()
+                if cid:
+                    from utils.fetch import fetch_ligand_by_cid
+                    p = fetch_ligand_by_cid(cid)
+                    console.print(f"[bold green]✓ Downloaded ligand to:[/bold green] {p}")
+            else:
+                pdb = input("Enter 4-character PDB ID (e.g. 7DTD): ").strip().upper()
+                if pdb:
+                    from utils.fetch import fetch_pdb
+                    p = fetch_pdb(pdb)
+                    console.print(f"[bold green]✓ Downloaded PDB structure to:[/bold green] {p}")
             return None
+
+        # Determine step numbers
+        if choice in ("A", "ALL", "FULL"):
+            selections = [1, 2, 3, 4, 5, 6, 7]
+            console.print("[cyan]Selected:[/cyan] [bold]Complete Virtual Screening Pipeline (Steps 1 → 7)[/bold]")
+        elif choice in ("B", "OPT", "OPTIMIZE"):
+            selections = [8]
+            console.print("[cyan]Selected:[/cyan] [bold]Lead Optimization Pipeline (Step 8)[/bold]")
+        elif choice in ("C", "CUSTOM"):
+            try:
+                custom_str = input("Enter steps to run (e.g. 1-4, or 1,2,6): ").strip()
+                selections = self._parse_step_selection(custom_str)
+            except (EOFError, KeyboardInterrupt):
+                return None
+        else:
+            selections = self._parse_step_selection(selection_raw)
+
+        if not selections:
+            console.print("[yellow]No valid workflow steps selected.[/yellow]")
+            return None
+
         selected_names = []
         for sel_id in selections:
             node = self.get_module_by_menu_id(sel_id)
@@ -852,6 +1143,7 @@ class WorkflowEngine:
                 selected_names.append(node.name)
             else:
                 console.print(f"[yellow]Unknown option: {sel_id}[/yellow]")
+
         if not selected_names:
             console.print("[yellow]No valid modules selected.[/yellow]")
             return None
@@ -860,6 +1152,28 @@ class WorkflowEngine:
             config = load_config()
 
         return self._run_workflow(selected_names, config, console)
+
+    @staticmethod
+    def _parse_step_selection(selection_str: str) -> list[int]:
+        """Parse comma/space separated numbers and ranges (e.g. '1-4', '1, 2, 6')."""
+        steps = set()
+        parts = selection_str.replace(",", " ").split()
+        for part in parts:
+            if "-" in part:
+                sub = part.split("-")
+                if len(sub) == 2 and sub[0].isdigit() and sub[1].isdigit():
+                    start, end = int(sub[0]), int(sub[1])
+                    for x in range(start, end + 1):
+                        steps.add(x)
+            elif ".." in part:
+                sub = part.split("..")
+                if len(sub) == 2 and sub[0].isdigit() and sub[1].isdigit():
+                    start, end = int(sub[0]), int(sub[1])
+                    for x in range(start, end + 1):
+                        steps.add(x)
+            elif part.isdigit():
+                steps.add(int(part))
+        return sorted(list(steps))
 
     def _run_workflow(
         self,
