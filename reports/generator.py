@@ -298,6 +298,67 @@ def generate_report(
         </div>
         """
 
+    # 6b. Build Interactive Collapsible Execution Logs Section
+    logs_html = ""
+    logs_dir = os.path.join(output_dir, "logs")
+    log_files = []
+    if os.path.exists(logs_dir):
+        log_files = sorted(Path(logs_dir).glob("*.log"))
+    elif os.path.exists("output/logs"):
+        log_files = sorted(Path("output/logs").glob("*.log"))
+
+    if log_files:
+        # Group by module and select the latest log file for each
+        latest_by_module: dict[str, Path] = {}
+        for lf in log_files:
+            mod_key = lf.stem.split("_202")[0]
+            if mod_key not in latest_by_module or lf.stat().st_mtime > latest_by_module[mod_key].stat().st_mtime:
+                latest_by_module[mod_key] = lf
+
+        stage_order = [
+            "protein_preparation", "ligand_preparation", "pocket_detection",
+            "druglikeness", "admet", "docking", "lead_selection",
+            "analogue_generation", "optimization_screening", "optimization_ranking"
+        ]
+        sorted_modules = sorted(
+            latest_by_module.keys(),
+            key=lambda k: stage_order.index(k) if k in stage_order else 999
+        )
+
+        log_cards = []
+        for mod_key in sorted_modules:
+            lf = latest_by_module[mod_key]
+            mod_title = mod_key.replace("_", " ").title()
+            try:
+                with open(lf, "r", encoding="utf-8") as f:
+                    log_text = f.read()
+            except Exception:
+                log_text = "(Could not read log file)"
+
+            log_cards.append(f"""
+            <details class="log-card" style="margin-bottom: 12px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: #ffffff;">
+              <summary style="padding: 12px 16px; background: #f8fafc; font-weight: 600; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none;">
+                <span style="display:flex; align-items:center; gap:8px;">📄 <b>{html.escape(mod_title)} Log</b></span>
+                <span style="font-size: 12px; color: var(--primary); font-weight: 500;">Click to view log ▾</span>
+              </summary>
+              <div style="padding: 14px; background: #0f172a; color: #f1f5f9; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; max-height: 400px; overflow-y: auto;">
+                <pre style="margin: 0; white-space: pre-wrap; word-break: break-all;">{html.escape(log_text)}</pre>
+              </div>
+            </details>
+            """)
+
+        logs_html = f"""
+        <div class="card" style="margin-top: 30px;">
+          <h3 style="display:flex; align-items:center; gap:8px;">
+            📋 Module Execution Logs ({len(log_cards)})
+          </h3>
+          <p style="color:#718096; font-size:14px; margin-bottom: 16px;">
+            Detailed execution logs are minimized by default. Click any module header below to expand and review full technical outputs.
+          </p>
+          {''.join(log_cards)}
+        </div>
+        """
+
     # 7. Assemble Full HTML Document
     html_content = _build_html_template(
         report_title=report_title,
@@ -315,6 +376,7 @@ def generate_report(
         protein_pdb=protein_pdb_content,
         ligand_sdf=ligand_pose_content,
         quarantine_html=quarantine_html,
+        logs_html=logs_html,
     )
 
     with open(output_file, "w", encoding="utf-8") as f:
@@ -505,7 +567,8 @@ def _build_html_template(
     report_title, workflow_type, timestamp,
     total_screened, passed_dl, passed_admet, total_docked,
     best_affinity, top_lead_name, top_lead_score,
-    table_rows_html, charts_html, protein_pdb, ligand_sdf, quarantine_html
+    table_rows_html, charts_html, protein_pdb, ligand_sdf, quarantine_html,
+    logs_html: str = ""
 ) -> str:
     """Combine components into a modern responsive HTML report."""
     
@@ -792,6 +855,9 @@ def _build_html_template(
 
     <!-- Quarantine Section -->
     {quarantine_html}
+
+    <!-- Collapsible Execution Logs Section -->
+    {logs_html}
 
     <footer>
       Generated automatically by <strong>DrugLab v0.2.0</strong> — Lightweight Computational Drug Discovery Platform.

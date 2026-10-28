@@ -22,7 +22,10 @@ from dataclasses import dataclass, field
 from collections import deque
 from typing import Callable, Any
 
-from utils.logger import setup_logger, log_step, log_summary
+from utils.logger import (
+    setup_logger, log_step, log_summary, console,
+    set_workflow_log_dir, print_log_contents, get_all_log_files
+)
 from utils.config import load_config, save_config_snapshot, DrugLabConfig
 from utils.io import ensure_dir
 
@@ -915,13 +918,15 @@ class WorkflowEngine:
         context["output_dir"] = output_dir
         ensure_dir(output_dir)
         save_config_snapshot(config, output_dir)
+        set_workflow_log_dir(os.path.join(output_dir, "logs"))
 
         # Resolve dependencies and sort unless skipping
         if skip_dependencies:
             execution_order = selected_names
         else:
             execution_order = self.resolve_dependencies(selected_names)
-        logger.info(f"Execution order: {' → '.join(execution_order)}")
+        
+        console.print(f"[bold]Execution plan:[/bold] [cyan]{' → '.join(execution_order)}[/cyan]\n")
 
         results = {}
         for name in execution_order:
@@ -934,13 +939,13 @@ class WorkflowEngine:
                 logger.warning(f"Module '{name}' has no execute function; skipping.")
                 continue
 
-            logger.info(f"Executing: {node.display_name}")
             try:
-                result = node.execute_fn(context, config)
+                with console.status(f"[bold cyan]Running {node.display_name}...[/bold cyan]", spinner="dots"):
+                    result = node.execute_fn(context, config)
                 results[name] = result
 
                 if isinstance(result, dict) and result.get("status") == "aborted":
-                    logger.info(f"Module '{name}' aborted. Halting workflow gracefully.")
+                    console.print(f"[yellow]Module '{node.display_name}' aborted. Halting workflow gracefully.[/yellow]")
                     break
 
                 # Update context with outputs
@@ -999,6 +1004,10 @@ class WorkflowEngine:
                     print()
         except Exception as e:
             logger.error(f"Failed to generate summary figures: {e}")
+
+        logs_dir = os.path.join(output_dir, "logs")
+        console.print(f"\n[dim]💡 Tip: Logs for each module are minimized above and saved in [cyan]{logs_dir}[/cyan][/dim]")
+        console.print("[dim]   Ctrl+click any log link above to open it, or run 'druglab report' to view them in the browser report.[/dim]\n")
 
         return results
 

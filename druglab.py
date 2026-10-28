@@ -38,6 +38,7 @@ def main():
         prog="druglab",
         description="DrugLab — Computational Drug Discovery Platform",
     )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose debug streaming logs on console")
     subparsers = parser.add_subparsers(dest="command")
 
     # ── Mode 3: Full Automation ──
@@ -55,6 +56,10 @@ def main():
     _add_fetch_subcommand(subparsers)
 
     args = parser.parse_args()
+
+    if getattr(args, "verbose", False):
+        from utils.logger import set_verbose
+        set_verbose(True)
 
     # Mode 1: No command → interactive menu
     if args.command is None:
