@@ -1037,7 +1037,7 @@ def _build_html_template(
             </div>
             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
               <button id="btn_bg_mode" class="btn btn-sm" onclick="toggleBackground()" title="Toggle Light / Dark Background">☀️ Light BG</button>
-              <button class="btn btn-sm" onclick="focusOnPocket()" title="Focus camera on active site cavity and ligand pose">🎯 Focus Pocket</button>
+              <button class="btn btn-sm" onclick="focusLigand()" title="Focus camera on the docked ligand pose">🎯 Focus Ligand</button>
               <button class="btn btn-sm" onclick="zoomFullProtein()" title="View whole target protein complex">🌐 Full Complex</button>
               <button class="btn btn-sm" onclick="reset3DView()" title="Reset 3D camera orientation">🔄 Reset View</button>
             </div>
@@ -1113,8 +1113,8 @@ def _build_html_template(
         <script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.4.2/3Dmol-min.js"></script>
         <script>
           let glviewer = null;
-          let protModel = null;
-          let ligModel = null;
+          let protModelIdx = -1;
+          let ligModelIdx = -1;
           let surfaceObj = null;
 
           let isDarkMode = true;
@@ -1137,7 +1137,8 @@ def _build_html_template(
             glviewer = $3Dmol.createViewer(container, config);
 
             if (protData && protData.length > 20) {{
-              protModel = glviewer.addModel(protData, "pdb");
+              glviewer.addModel(protData, "pdb");
+              protModelIdx = glviewer.getNumModels() - 1;
             }}
 
             let ligSelect = document.getElementById("ligand_select");
@@ -1165,7 +1166,7 @@ def _build_html_template(
 
             applyStyles();
             setTimeout(function() {{
-              focusOnPocket();
+              focusLigand();
             }}, 200);
           }}
 
@@ -1218,14 +1219,15 @@ def _build_html_template(
 
             let pose = ldata.poses[poseIdx];
 
-            if (ligModel !== null) {{
-              glviewer.removeModel(ligModel);
-              ligModel = null;
+            if (ligModelIdx >= 0) {{
+              glviewer.removeModel(glviewer.getModel(ligModelIdx));
+              ligModelIdx = -1;
             }}
 
             if (pose.data && pose.data.length > 20) {{
               let fmt = pose.format || "pdb";
-              ligModel = glviewer.addModel(pose.data, fmt);
+              glviewer.addModel(pose.data, fmt);
+              ligModelIdx = glviewer.getNumModels() - 1;
             }}
 
             let affBadge = document.getElementById("badge_affinity");
@@ -1260,7 +1262,7 @@ def _build_html_template(
             }}
 
             applyStyles();
-            focusOnPocket();
+            focusLigand();
           }}
 
           function applyStyles() {{
@@ -1272,47 +1274,48 @@ def _build_html_template(
             }}
 
             // 1. Protein styles
-            if (protModel !== null) {{
+            if (protModelIdx >= 0) {{
               let protColor = "spectrum";
+              glviewer.setStyle({{model: protModelIdx}}, {{}});
               if (currentProtStyle === "cartoon") {{
-                glviewer.setStyle({{model: protModel}}, {{cartoon: {{color: protColor, opacity: 0.85}}}});
+                glviewer.setStyle({{model: protModelIdx}}, {{cartoon: {{color: protColor, opacity: 0.85}}}});
               }} else if (currentProtStyle === "surface") {{
-                glviewer.setStyle({{model: protModel}}, {{cartoon: {{opacity: 0.05}}}});
+                glviewer.setStyle({{model: protModelIdx}}, {{}});
                 let surfColor = isDarkMode ? "white" : "#cbd5e1";
-                surfaceObj = glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.65, color: surfColor}}, {{model: protModel}});
+                surfaceObj = glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.65, color: surfColor}}, {{model: protModelIdx}});
               }} else if (currentProtStyle === "cartoon_surface") {{
-                glviewer.setStyle({{model: protModel}}, {{cartoon: {{color: protColor, opacity: 0.85}}}});
+                glviewer.setStyle({{model: protModelIdx}}, {{cartoon: {{color: protColor, opacity: 0.85}}}});
                 let surfColor = isDarkMode ? "white" : "#cbd5e1";
-                surfaceObj = glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.35, color: surfColor}}, {{model: protModel}});
+                surfaceObj = glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.35, color: surfColor}}, {{model: protModelIdx}});
               }} else if (currentProtStyle === "sticks") {{
-                glviewer.setStyle({{model: protModel}}, {{stick: {{colorscheme: "amino", radius: 0.16}}, cartoon: {{opacity: 0.2}}}});
+                glviewer.setStyle({{model: protModelIdx}}, {{stick: {{colorscheme: "amino", radius: 0.16}}, cartoon: {{opacity: 0.2}}}});
               }} else if (currentProtStyle === "wireframe") {{
-                glviewer.setStyle({{model: protModel}}, {{line: {{color: isDarkMode ? "#e2e8f0" : "#4a5568"}}}});
+                glviewer.setStyle({{model: protModelIdx}}, {{line: {{colorscheme: "amino"}}}});
               }} else if (currentProtStyle === "off") {{
-                glviewer.setStyle({{model: protModel}}, {{}});
+                glviewer.setStyle({{model: protModelIdx}}, {{}});
               }}
 
               // Highlight pocket residues within 5Å of ligand
-              if (showPocketResidues && ligModel !== null && currentProtStyle !== "off" && currentProtStyle !== "sticks") {{
+              if (showPocketResidues && ligModelIdx >= 0 && currentProtStyle !== "off" && currentProtStyle !== "sticks") {{
                 glviewer.setStyle(
-                  {{model: protModel, within: {{distance: 5.0, sel: {{model: ligModel}}}}}},
+                  {{model: protModelIdx, within: {{distance: 5.0, sel: {{model: ligModelIdx}}}}}},
                   {{stick: {{colorscheme: "amino", radius: 0.22}}, cartoon: {{opacity: 0.5}}}}
                 );
               }}
             }}
 
             // 2. Ligand styles
-            if (ligModel !== null) {{
+            if (ligModelIdx >= 0) {{
               let carbonScheme = "greenCarbon";
               if (currentLigStyle === "sticks") {{
-                glviewer.setStyle({{model: ligModel}}, {{stick: {{colorscheme: carbonScheme, radius: 0.28}}}});
+                glviewer.setStyle({{model: ligModelIdx}}, {{stick: {{colorscheme: carbonScheme, radius: 0.28}}}});
               }} else if (currentLigStyle === "ball_stick") {{
-                glviewer.setStyle({{model: ligModel}}, {{
+                glviewer.setStyle({{model: ligModelIdx}}, {{
                   stick: {{colorscheme: carbonScheme, radius: 0.22}},
                   sphere: {{radius: 0.42, colorscheme: carbonScheme}}
                 }});
               }} else if (currentLigStyle === "spheres") {{
-                glviewer.setStyle({{model: ligModel}}, {{sphere: {{colorscheme: carbonScheme}}}});
+                glviewer.setStyle({{model: ligModelIdx}}, {{sphere: {{colorscheme: carbonScheme}}}});
               }}
             }}
 
@@ -1360,12 +1363,12 @@ def _build_html_template(
             applyStyles();
           }}
 
-          function focusOnPocket() {{
+          function focusLigand() {{
             if (!glviewer) return;
-            if (ligModel !== null) {{
-              glviewer.zoomTo({{within: {{distance: 7.0, sel: {{model: ligModel}}}}}}, 400);
-            }} else if (protModel !== null) {{
-              glviewer.zoomTo({{model: protModel}}, 400);
+            if (ligModelIdx >= 0) {{
+              glviewer.zoomTo({{model: ligModelIdx}}, 400);
+            }} else if (protModelIdx >= 0) {{
+              glviewer.zoomTo({{model: protModelIdx}}, 400);
             }} else {{
               glviewer.zoomTo();
             }}
@@ -1380,8 +1383,8 @@ def _build_html_template(
 
           function reset3DView() {{
             if (!glviewer) return;
-            glviewer.setCameraDirection([0, 0, 1]);
-            focusOnPocket();
+            glviewer.zoomTo();
+            glviewer.render();
           }}
         </script>
         """

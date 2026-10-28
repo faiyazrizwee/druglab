@@ -107,7 +107,7 @@ ENDMDL
     assert "Cartoon + Surface" in content
     assert "Ball &amp; Stick" in content
     assert "chk_pocket_residues" in content
-    assert "focusOnPocket" in content
+    assert "focusLigand" in content
     # Verify chemical space grid and rules
     assert "Chemical Space (MW vs cLogP)" in content
     assert "Lipinski MW" in content
