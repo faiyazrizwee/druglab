@@ -529,6 +529,141 @@ def generate_summary_figures(counts: dict[str, int], output_dir: str) -> list[st
     return figs
 
 
+def generate_docking_figures(df: pd.DataFrame, output_dir: str) -> list[str]:
+    """Generate binding affinity distribution and correlation figures for molecular docking."""
+    figs = []
+    dock_dir = os.path.join(output_dir, "figures", "docking")
+    ensure_dir(dock_dir)
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        if not df.empty and "best_affinity" in df.columns:
+            affinities = [float(a) for a in df["best_affinity"] if pd.notnull(a)]
+            if affinities:
+                # 1. Binding Affinity Histogram
+                fig, ax = plt.subplots(figsize=(6.5, 4.2))
+                ax.hist(affinities, bins=max(5, min(15, len(affinities))), color="#2b6cb0", edgecolor="#1a365d", alpha=0.75)
+                mean_aff = float(np.mean(affinities))
+                ax.axvline(mean_aff, color="#e53e3e", linestyle="--", label=f"Mean: {mean_aff:.2f}")
+                ax.set_xlabel("Vina Binding Affinity (kcal/mol)", fontsize=11, fontweight="bold")
+                ax.set_ylabel("Ligand Count", fontsize=11, fontweight="bold")
+                ax.set_title("Docking Binding Affinity Distribution", fontsize=12, fontweight="bold")
+                ax.grid(True, linestyle="--", alpha=0.5)
+                ax.legend(frameon=True)
+
+                out_path = os.path.join(dock_dir, "affinity_distribution.png")
+                plt.tight_layout()
+                plt.savefig(out_path, dpi=150)
+                plt.close(fig)
+                figs.append(out_path)
+
+                # 2. Affinity vs MW or Risk Score scatter if available
+                if "MW" in df.columns or "Risk_Score" in df.columns:
+                    fig, ax = plt.subplots(figsize=(6.5, 4.2))
+                    x_col = "MW" if "MW" in df.columns else "Risk_Score"
+                    x_label = "Molecular Weight (Da)" if x_col == "MW" else "ADMET Risk Score"
+                    ax.scatter(df[x_col], df["best_affinity"], c="#319795", s=50, alpha=0.8, edgecolors="#234e52")
+                    ax.set_xlabel(x_label, fontsize=11, fontweight="bold")
+                    ax.set_ylabel("Binding Affinity (kcal/mol)", fontsize=11, fontweight="bold")
+                    ax.set_title(f"Docking Affinity vs {x_col}", fontsize=12, fontweight="bold")
+                    ax.grid(True, linestyle="--", alpha=0.5)
+
+                    out_path2 = os.path.join(dock_dir, "affinity_scatter.png")
+                    plt.tight_layout()
+                    plt.savefig(out_path2, dpi=150)
+                    plt.close(fig)
+                    figs.append(out_path2)
+
+    except Exception as e:
+        logger.warning(f"Could not generate docking figures: {e}")
+
+    return figs
+
+
+def generate_lead_selection_figures(df: pd.DataFrame, output_dir: str) -> list[str]:
+    """Generate prioritized lead ranking scores and property comparison figures."""
+    figs = []
+    lead_dir = os.path.join(output_dir, "figures", "lead_selection")
+    ensure_dir(lead_dir)
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        if not df.empty and "composite_score" in df.columns:
+            top_df = df.head(10)
+            names = [str(n)[:18] for n in top_df.get("name", [f"Lead_{i+1}" for i in range(len(top_df))])]
+            scores = [float(s) for s in top_df["composite_score"]]
+
+            # 1. Top Leads Composite Score Bar Chart
+            fig, ax = plt.subplots(figsize=(7, 4.2))
+            bars = ax.barh(range(len(names)), scores, color="#2f855a", edgecolor="#22543d", height=0.6)
+            ax.set_yticks(range(len(names)))
+            ax.set_yticklabels(names, fontsize=10)
+            ax.invert_yaxis()
+            ax.set_xlabel("Composite Priority Score (0-1)", fontsize=11, fontweight="bold")
+            ax.set_title("Top Selected Lead Candidates", fontsize=12, fontweight="bold")
+            ax.grid(axis="x", linestyle="--", alpha=0.5)
+
+            for bar in bars:
+                width = bar.get_width()
+                ax.annotate(f"{width:.3f}", xy=(width, bar.get_y() + bar.get_height() / 2),
+                            xytext=(4, 0), textcoords="offset points", ha="left", va="center", fontsize=9, fontweight="bold")
+
+            out_path = os.path.join(lead_dir, "lead_ranking_scores.png")
+            plt.tight_layout()
+            plt.savefig(out_path, dpi=150)
+            plt.close(fig)
+            figs.append(out_path)
+
+    except Exception as e:
+        logger.warning(f"Could not generate lead selection figures: {e}")
+
+    return figs
+
+
+def generate_optimization_figures(df: pd.DataFrame, parent_df: pd.DataFrame, output_dir: str) -> list[str]:
+    """Generate lead optimization candidate ranking and improvement figures."""
+    figs = []
+    opt_dir = os.path.join(output_dir, "figures", "optimization")
+    ensure_dir(opt_dir)
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        score_col = "Total_Score" if "Total_Score" in df.columns else ("composite_score" if "composite_score" in df.columns else None)
+        if not df.empty and score_col:
+            top_df = df.head(10)
+            names = [str(n)[:18] for n in top_df.get("name", [f"Opt_{i+1}" for i in range(len(top_df))])]
+            scores = [float(s) for s in top_df[score_col]]
+
+            fig, ax = plt.subplots(figsize=(7, 4.2))
+            bars = ax.barh(range(len(names)), scores, color="#805ad5", edgecolor="#44337a", height=0.6)
+            ax.set_yticks(range(len(names)))
+            ax.set_yticklabels(names, fontsize=10)
+            ax.invert_yaxis()
+            ax.set_xlabel("Optimization Score", fontsize=11, fontweight="bold")
+            ax.set_title("Top Optimized Analogues", fontsize=12, fontweight="bold")
+            ax.grid(axis="x", linestyle="--", alpha=0.5)
+
+            out_path = os.path.join(opt_dir, "optimization_scores.png")
+            plt.tight_layout()
+            plt.savefig(out_path, dpi=150)
+            plt.close(fig)
+            figs.append(out_path)
+
+    except Exception as e:
+        logger.warning(f"Could not generate optimization figures: {e}")
+
+    return figs
+
+
 def _build_plotly_charts(dl_df, admet_df, docking_df, ranking_df, total_screened, passed_dl, passed_admet, total_docked) -> str:
     """Build Plotly chart interactive HTML blocks."""
     charts = []

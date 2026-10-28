@@ -195,6 +195,9 @@ def select_leads(
         dl_subset = dl_df[dl_cols].drop_duplicates(subset=["name"])
         merged = merged.merge(dl_subset, on="name", how="left")
 
+    # De-fragment DataFrame after merging multiple wide descriptor tables
+    merged = merged.copy()
+
     # Compute Ligand Efficiency (LE) and Lipophilic Efficiency (LLE / LipE)
     if "best_affinity" in merged.columns:
         if "HeavyAtoms" in merged.columns:

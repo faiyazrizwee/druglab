@@ -1004,8 +1004,18 @@ class WorkflowEngine:
         except Exception as e:
             logger.error(f"Failed to generate summary figures: {e}")
 
+        # Auto-generate interactive HTML report at completion
+        try:
+            from reports.generator import generate_report
+            rep_path = generate_report(output_dir=output_dir)
+            abs_rep = Path(rep_path).resolve().as_uri()
+            console.print(f"[bold green]✓ Interactive HTML Report generated:[/bold green] [cyan]{rep_path}[/cyan]")
+            console.print(f"  [dim]Open in browser (Ctrl+click):[/dim] [link={abs_rep}]{rep_path}[/link]\n")
+        except Exception as rep_err:
+            logger.debug(f"Could not auto-generate report: {rep_err}")
+
         logs_dir = os.path.join(output_dir, "logs")
-        console.print(f"\n[dim]💡 Tip: Logs for each module are minimized above and saved in [cyan]{logs_dir}[/cyan][/dim]")
+        console.print(f"[dim]💡 Tip: Logs for each module are minimized above and saved in [cyan]{logs_dir}[/cyan][/dim]")
         console.print("[dim]   Ctrl+click any log link above to open it, or run 'druglab report' to view them in the browser report.[/dim]\n")
 
         return results
