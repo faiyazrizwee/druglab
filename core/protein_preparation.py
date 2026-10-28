@@ -43,7 +43,7 @@ def prepare_protein(
     remove_water: bool = True,
     remove_heterogens: bool = True,
     add_hydrogens: bool = True,
-    fix_missing_residues: bool = True,
+    fix_missing_residues: bool = False,
     fix_missing_atoms: bool = True,
     ph: float = 7.4,
     keep_ligands: list[str] | None = None,
@@ -100,12 +100,16 @@ def prepare_protein(
         logger.info(f"Loading PDB: {input_pdb}")
         fixer = PDBFixer(filename=input_pdb)
 
-        # Force OpenMM to use the Reference platform (safer, robust, no OpenCL compiler hangs)
+        # Prefer optimized multi-threaded CPU platform (10x faster than scalar Reference), fall back to Reference
         try:
-            fixer.platform = openmm.Platform.getPlatformByName("Reference")
-            logger.debug("Using OpenMM Reference platform")
-        except Exception as plat_err:
-            logger.warning(f"Could not explicitly set Reference platform: {plat_err}")
+            fixer.platform = openmm.Platform.getPlatformByName("CPU")
+            logger.debug("Using OpenMM CPU platform")
+        except Exception:
+            try:
+                fixer.platform = openmm.Platform.getPlatformByName("Reference")
+                logger.debug("Using OpenMM Reference platform")
+            except Exception as plat_err:
+                logger.warning(f"Could not explicitly set platform: {plat_err}")
 
         # Record initial chains
         initial_chains = [c.id for c in fixer.topology.chains()]
@@ -164,19 +168,32 @@ def prepare_protein(
         
         # If we do not want to fix missing residues (rebuilding massive loops),
         # we clear the dict.
+        MAX_LOOP_LENGTH = 10
         if not fix_missing_residues:
             logger.info("Skipping rebuilding of completely missing residues/loops (clearing missingResidues)")
             fixer.missingResidues = {}
         else:
             if fixer.missingResidues:
                 # Sanitize missingResidues:
-                # 1. Filter out invalid chain indices (e.g. if chains were deleted)
-                # 2. Filter out non-standard residue names (PDBFixer templates only support standard amino/nucleic acids)
+                # 1. Filter out invalid chain indices
+                # 2. Skip terminal regions (index 0 or >= len(residues)), which are expression tags or disordered tails
+                # 3. Skip loops longer than MAX_LOOP_LENGTH (10 residues) to avoid CPU minimization hangs
+                # 4. Filter out non-standard residue names (PDBFixer templates only support standard amino/nucleic acids)
                 chains_list = list(fixer.topology.chains())
                 valid_templates = set(getattr(fixer, "templates", {}).keys()) or STANDARD_RESIDUES
                 filtered_missing = {}
                 for (chain_idx, res_idx), res_names in fixer.missingResidues.items():
                     if chain_idx >= len(chains_list):
+                        continue
+                    chain_res_count = len(list(chains_list[chain_idx].residues()))
+                    if res_idx == 0 or res_idx >= chain_res_count:
+                        logger.debug(f"Skipping terminal missing segment chain {chain_idx} at index {res_idx} ({len(res_names)} residues)")
+                        continue
+                    if len(res_names) > MAX_LOOP_LENGTH:
+                        logger.warning(
+                            f"Skipping long missing loop on chain {chains_list[chain_idx].id} at index {res_idx} "
+                            f"({len(res_names)} residues > max {MAX_LOOP_LENGTH}) to avoid minimization hang."
+                        )
                         continue
                     valid_res_names = [rn for rn in res_names if rn in valid_templates]
                     if valid_res_names:
@@ -184,11 +201,11 @@ def prepare_protein(
                 fixer.missingResidues = filtered_missing
 
                 if fixer.missingResidues:
-                    missing_res_desc = [f"chain {chains_list[k[0]].id} index {k[1]} ({v})" for k, v in fixer.missingResidues.items()]
-                    logger.info(f"Found {len(fixer.missingResidues)} missing residue segments to rebuild: {missing_res_desc[:5]}...")
+                    missing_res_desc = [f"chain {chains_list[k[0]].id} index {k[1]} ({len(v)} res)" for k, v in fixer.missingResidues.items()]
+                    logger.info(f"Found {len(fixer.missingResidues)} short missing loop segment(s) to rebuild: {missing_res_desc}...")
                     metrics["fixed_residues"] = [f"{chains_list[k[0]].id}:{k[1]}" for k in fixer.missingResidues.keys()]
                 else:
-                    logger.info("No standard missing residue segments to rebuild after filtering non-standard codes.")
+                    logger.info("No short missing loop segments to rebuild (terminal tags and large unresolved regions skipped).")
 
         # Find non-standard residues and replace them (e.g. MSE to MET)
         fixer.findNonstandardResidues()
