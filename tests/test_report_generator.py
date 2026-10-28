@@ -76,3 +76,19 @@ def test_generate_report_empty(temp_dir):
     with open(report_html, "r", encoding="utf-8") as f:
         content = f.read()
     assert "<!DOCTYPE html>" in content
+
+
+def test_generate_summary_figures(temp_dir):
+    from reports.generator import generate_summary_figures
+    counts = {
+        "Input Ligands": 50,
+        "Drug-Like": 40,
+        "ADMET Passed": 30,
+        "Docked": 30,
+        "Selected Leads": 5,
+    }
+    figs = generate_summary_figures(counts, temp_dir)
+    assert len(figs) == 1
+    assert os.path.isfile(figs[0])
+    assert os.path.getsize(figs[0]) > 0
+

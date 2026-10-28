@@ -477,6 +477,58 @@ def generate_admet_figures(df: pd.DataFrame, output_dir: str) -> list[str]:
     return figs
 
 
+def generate_summary_figures(counts: dict[str, int], output_dir: str) -> list[str]:
+    """Generate pipeline summary attrition / funnel figures."""
+    figs = []
+    summary_dir = os.path.join(output_dir, "figures", "summary")
+    ensure_dir(summary_dir)
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        if counts:
+            stages = list(counts.keys())
+            values = [int(v) for v in counts.values()]
+
+            fig, ax = plt.subplots(figsize=(8, 4.5))
+            colors = ["#3182ce", "#319795", "#38a169", "#d69e2e", "#e53e3e", "#805ad5"]
+            bar_colors = [colors[i % len(colors)] for i in range(len(stages))]
+
+            bars = ax.bar(stages, values, color=bar_colors, edgecolor="#2d3748", width=0.55)
+            ax.set_ylabel("Molecule Count", fontsize=11, fontweight="bold")
+            ax.set_title("Virtual Screening Pipeline Funnel / Stage Counts", fontsize=12, fontweight="bold")
+            ax.grid(axis="y", linestyle="--", alpha=0.5)
+
+            # Add value labels above bars
+            for bar in bars:
+                height = bar.get_height()
+                ax.annotate(
+                    f"{height}",
+                    xy=(bar.get_x() + bar.get_width() / 2, height),
+                    xytext=(0, 4),
+                    textcoords="offset points",
+                    ha="center",
+                    va="bottom",
+                    fontweight="bold",
+                    fontsize=10,
+                )
+
+            plt.xticks(rotation=15, ha="right", fontsize=10)
+            plt.tight_layout()
+
+            out_path = os.path.join(summary_dir, "pipeline_funnel.png")
+            plt.savefig(out_path, dpi=150)
+            plt.close(fig)
+            figs.append(out_path)
+
+    except Exception as e:
+        logger.warning(f"Could not generate summary figures: {e}")
+
+    return figs
+
+
 def _build_plotly_charts(dl_df, admet_df, docking_df, ranking_df, total_screened, passed_dl, passed_admet, total_docked) -> str:
     """Build Plotly chart interactive HTML blocks."""
     charts = []
