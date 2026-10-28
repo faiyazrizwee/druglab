@@ -231,6 +231,7 @@ def log_step(
         if details:
             for key, value in details.items():
                 logger.info(f"  {key}: {value}")
+        console.print(f"[bold cyan]▶ {step_name}[/bold cyan] [dim]in progress...[/dim]")
         return
 
     # Calculate duration on completion/failure

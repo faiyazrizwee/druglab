@@ -940,8 +940,7 @@ class WorkflowEngine:
                 continue
 
             try:
-                with console.status(f"[bold cyan]Running {node.display_name}...[/bold cyan]", spinner="dots"):
-                    result = node.execute_fn(context, config)
+                result = node.execute_fn(context, config)
                 results[name] = result
 
                 if isinstance(result, dict) and result.get("status") == "aborted":
