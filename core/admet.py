@@ -22,7 +22,7 @@ import numpy as np
 from rdkit import Chem
 from rdkit.Chem import Descriptors, rdMolDescriptors
 
-from utils.logger import setup_logger, log_step
+from utils.logger import setup_logger, log_step, suppress_stdout_stderr
 from utils.io import (
     ensure_dir,
     write_json,
@@ -659,8 +659,11 @@ def screen_admet(
 # ──────────────────────────────────────────────────────────────
 
 def _predict_admet_ai(mols: list) -> pd.DataFrame:
-    """Run ADMET-AI predictions on a list of RDKit Mol objects."""
-    model = ADMETModel()
+    """Run ADMET-AI predictions on a list of RDKit Mol objects silently."""
+    import warnings
+    warnings.filterwarnings("ignore")
+    logging.getLogger("lightning.pytorch").setLevel(logging.ERROR)
+    logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
 
     smiles_list = []
     for mol in mols:
@@ -670,7 +673,10 @@ def _predict_admet_ai(mols: list) -> pd.DataFrame:
         else:
             smiles_list.append("")
 
-    predictions = model.predict(smiles=smiles_list)
+    with suppress_stdout_stderr():
+        model = ADMETModel()
+        predictions = model.predict(smiles=smiles_list)
+
     return predictions
 
 

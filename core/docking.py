@@ -16,7 +16,7 @@ import numpy as np
 from pathlib import Path
 from rdkit import Chem
 
-from utils.logger import setup_logger, log_step
+from utils.logger import setup_logger, log_step, suppress_stdout_stderr, is_verbose
 from utils.io import (
     ensure_dir,
     write_json,
@@ -394,25 +394,27 @@ def _dock_vina_python(
     exhaustiveness, n_poses, energy_range, seed, n_cpus, score_only,
 ) -> dict:
     """Dock using Vina Python bindings."""
-    v = Vina(sf_name="vina", cpu=n_cpus if n_cpus > 0 else 0, seed=seed)
-    v.set_receptor(protein_pdbqt)
-    v.set_ligand_from_file(ligand_pdbqt)
-    v.compute_vina_maps(
-        center=center,
-        box_size=size,
-    )
+    verbosity = 1 if is_verbose() else 0
+    with suppress_stdout_stderr():
+        v = Vina(sf_name="vina", cpu=n_cpus if n_cpus > 0 else 0, seed=seed, verbosity=verbosity)
+        v.set_receptor(protein_pdbqt)
+        v.set_ligand_from_file(ligand_pdbqt)
+        v.compute_vina_maps(
+            center=center,
+            box_size=size,
+        )
 
-    if score_only:
-        energy = v.score()
-        return {"best_affinity": energy[0], "affinities": [energy[0]]}
+        if score_only:
+            energy = v.score()
+            return {"best_affinity": energy[0], "affinities": [energy[0]]}
 
-    v.dock(
-        exhaustiveness=exhaustiveness,
-        n_poses=n_poses,
-        min_rmsd=1.0,
-    )
+        v.dock(
+            exhaustiveness=exhaustiveness,
+            n_poses=n_poses,
+            min_rmsd=1.0,
+        )
 
-    v.write_poses(output_path, n_poses=n_poses, overwrite=True)
+        v.write_poses(output_path, n_poses=n_poses, overwrite=True)
 
     # Parse energies from poses
     affinities = _parse_pdbqt_affinities(output_path)

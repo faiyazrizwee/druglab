@@ -15,9 +15,11 @@ Usage:
 
 import logging
 import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from contextlib import contextmanager
 
 from rich.console import Console
 from rich.logging import RichHandler
@@ -58,6 +60,46 @@ def set_verbose(verbose: bool) -> None:
 def is_verbose() -> bool:
     """Check if verbose logging is enabled."""
     return _is_verbose
+
+
+@contextmanager
+def suppress_stdout_stderr(force: bool = False):
+    """
+    Suppress low-level C and Python stdout/stderr (e.g. from PyTorch, Lightning, tqdm, Chemprop, Vina).
+    If verbose mode is active and not forced, does nothing.
+    """
+    if _is_verbose and not force:
+        yield
+        return
+
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        old_stdout = os.dup(1)
+        old_stderr = os.dup(2)
+
+        os.dup2(devnull, 1)
+        os.dup2(devnull, 2)
+        os.close(devnull)
+        try:
+            yield
+        finally:
+            try:
+                sys.stdout.flush()
+                sys.stderr.flush()
+            except Exception:
+                pass
+            os.dup2(old_stdout, 1)
+            os.dup2(old_stderr, 2)
+            os.close(old_stdout)
+            os.close(old_stderr)
+    except Exception:
+        yield
 
 
 def set_workflow_log_dir(log_dir: str) -> None:
