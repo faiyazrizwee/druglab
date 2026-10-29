@@ -1356,18 +1356,25 @@ def _build_html_template(
                 }}
               }}
 
-              // Surface selection: for large structures (>1500 atoms like 7DTD), surface the active binding cavity to keep performance instantaneous
-              let surfSel = {{}};
-              if (protAtoms.length > 1500) {{
-                if (pocketResis.size > 0) {{
-                  surfSel = {{model: protModel, resi: Array.from(pocketResis)}};
-                }} else if (protAtoms[0] && protAtoms[0].chain) {{
-                  surfSel = {{model: protModel, chain: protAtoms[0].chain}};
-                }} else {{
-                  surfSel = {{model: protModel}};
-                }}
+              // Surface selection: strictly constrain surface to the active binding cavity to keep performance instantaneous and prevent massive memory mapping/WebGL crashes
+              let surfSel = null;
+              if (pocketResis.size > 0) {{
+                surfSel = {{model: protModel, resi: Array.from(pocketResis)}};
+              }} else if (ligModel !== null && ligAtoms.length > 0) {{
+                surfSel = {{
+                  model: protModel,
+                  within: {{distance: 8.0, sel: {{model: ligModel}}}}
+                }};
               }} else {{
-                surfSel = {{model: protModel}};
+                // Constrain to active region near center (max 10Å radius) to prevent browser memory crashes
+                let c = protModel.getSelectionCenter ? protModel.getSelectionCenter({{}}) : {{x:0, y:0, z:0}};
+                surfSel = {{
+                  model: protModel,
+                  predicate: function(a) {{
+                    let dx = a.x - c.x, dy = a.y - c.y, dz = a.z - c.z;
+                    return (dx * dx + dy * dy + dz * dz) <= 100.0;
+                  }}
+                }};
               }}
 
               let surfColor = isDarkMode ? "white" : "#cbd5e1";
@@ -1381,10 +1388,18 @@ def _build_html_template(
                     {{stick: {{colorscheme: "amino", radius: 0.16}}}}
                   );
                 }}
-                glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.65, color: surfColor}}, surfSel);
+                try {{
+                  glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.65, color: surfColor}}, surfSel);
+                }} catch (e) {{
+                  console.warn("Surface generation error:", e);
+                }}
               }} else if (currentProtStyle === "cartoon_surface") {{
                 protModel.setStyle({{}}, {{cartoon: {{color: protColor, opacity: 0.85}}}});
-                glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.35, color: surfColor}}, surfSel);
+                try {{
+                  glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.35, color: surfColor}}, surfSel);
+                }} catch (e) {{
+                  console.warn("Surface generation error:", e);
+                }}
               }} else if (currentProtStyle === "sticks") {{
                 protModel.setStyle({{}}, {{stick: {{colorscheme: "amino", radius: 0.16}}}});
               }} else if (currentProtStyle === "wireframe") {{
@@ -1492,6 +1507,42 @@ def _build_html_template(
             glviewer.zoomTo();
             glviewer.render();
           }}
+
+          function cleanupWebGL() {{
+            if (glviewer) {{
+              try {{
+                glviewer.removeAllSurfaces();
+                glviewer.removeAllModels();
+                glviewer.removeAllShapes();
+                glviewer.removeAllLabels();
+                glviewer.clear();
+
+                let container = document.getElementById("pose3d_viewer");
+                if (container) {{
+                  let canvases = container.querySelectorAll("canvas");
+                  canvases.forEach(function(canvas) {{
+                    let gl = canvas.getContext("webgl") || canvas.getContext("webgl2") || canvas.getContext("experimental-webgl");
+                    if (gl) {{
+                      let loseExt = gl.getExtension("WEBGL_lose_context");
+                      if (loseExt) {{
+                        loseExt.loseContext();
+                      }}
+                    }}
+                    if (canvas.parentNode) {{
+                      canvas.parentNode.removeChild(canvas);
+                    }}
+                  }});
+                }}
+                glviewer = null;
+              }} catch (e) {{
+                console.warn("WebGL cleanup error:", e);
+              }}
+            }}
+          }}
+
+          window.addEventListener("beforeunload", cleanupWebGL);
+          window.addEventListener("pagehide", cleanupWebGL);
+          window.addEventListener("unload", cleanupWebGL);
         </script>
         """
 

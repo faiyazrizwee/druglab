@@ -828,6 +828,42 @@ def _build_pocket_gui_html(
       notifyCoordinates();
     }}
 
+    function cleanupWebGL() {{
+      if (glviewer) {{
+        try {{
+          glviewer.removeAllSurfaces();
+          glviewer.removeAllModels();
+          glviewer.removeAllShapes();
+          glviewer.removeAllLabels();
+          glviewer.clear();
+
+          let container = document.getElementById("glviewer_canvas");
+          if (container) {{
+            let canvases = container.querySelectorAll("canvas");
+            canvases.forEach(function(canvas) {{
+              let gl = canvas.getContext("webgl") || canvas.getContext("webgl2") || canvas.getContext("experimental-webgl");
+              if (gl) {{
+                let loseExt = gl.getExtension("WEBGL_lose_context");
+                if (loseExt) {{
+                  loseExt.loseContext();
+                }}
+              }}
+              if (canvas.parentNode) {{
+                canvas.parentNode.removeChild(canvas);
+              }}
+            }});
+          }}
+          glviewer = null;
+        }} catch (e) {{
+          console.warn("WebGL cleanup error:", e);
+        }}
+      }}
+    }}
+
+    window.addEventListener("beforeunload", cleanupWebGL);
+    window.addEventListener("pagehide", cleanupWebGL);
+    window.addEventListener("unload", cleanupWebGL);
+
     function submitCoordinates() {{
       let payload = {{
         center: [parseFloat(cx.toFixed(3)), parseFloat(cy.toFixed(3)), parseFloat(cz.toFixed(3))],
@@ -846,6 +882,7 @@ def _build_pocket_gui_html(
         body: JSON.stringify(payload)
       }}).then(response => {{
         if (response.ok) {{
+          cleanupWebGL();
           let modal = document.getElementById("modal_confirmed");
           let modalCoords = document.getElementById("modal_coords");
           if (modalCoords) {{
@@ -1025,6 +1062,9 @@ def launch_pocket_gui(
     finally:
         server.shutdown()
         server.server_close()
+        server.html_content = None
+        import gc
+        gc.collect()
 
     final_center, final_size = server.selected_coordinates
 

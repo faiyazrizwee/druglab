@@ -74,6 +74,8 @@ def test_build_pocket_gui_html(sample_pockets):
     assert "updateProteinStyles" in html
     assert "focusBox" in html
     assert "Pocket 1 ★ Best" in html
+    assert "cleanupWebGL" in html
+    assert "WEBGL_lose_context" in html
 
 
 def test_pocket_gui_http_endpoints(sample_pockets):
