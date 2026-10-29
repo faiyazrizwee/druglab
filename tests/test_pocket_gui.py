@@ -198,3 +198,52 @@ def test_launch_pocket_gui_with_doc_pdb_fallback(sample_pockets):
         )
         assert method == "graphical_gui"
         assert selected["center"] == [110.983, 113.918, 115.921]
+
+
+def test_launch_pocket_gui_preserves_custom_size_40(sample_pockets):
+    port = find_free_port()
+
+    def client_worker():
+        import time
+        time.sleep(0.2)
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/select_pocket",
+            data=json.dumps({
+                "center": [110.983, 109.918, 108.921],
+                "size": [40.0, 40.0, 40.0],
+            }).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                resp.read()
+        except Exception:
+            pass
+
+    threading.Thread(target=client_worker, daemon=True).start()
+    with patch("core.pocket_gui.find_free_port", return_value=port):
+        with patch("webbrowser.open"):
+            selected, method = launch_pocket_gui(
+                sample_pockets,
+                max_box_dimension=30.0,
+                timeout=3.0,
+            )
+
+    assert method == "graphical_gui"
+    assert selected["center"] == [110.983, 109.918, 108.921]
+    assert selected["size"] == [40.0, 40.0, 40.0]
+
+
+def test_collect_manual_pocket_preserves_custom_size_40():
+    from core.pocket_detection import _collect_manual_pocket
+    inputs = [
+        "110.983", "109.918", "108.921",
+        "40.0", "40.0", "40.0",
+    ]
+    with patch("builtins.input", side_effect=inputs):
+        pocket = _collect_manual_pocket(doc=None, max_box_dimension=30.0, warn_large_boxes=False)
+    assert pocket is not None
+    assert pocket["center"] == [110.983, 109.918, 108.921]
+    assert pocket["size"] == [40.0, 40.0, 40.0]
+

@@ -114,6 +114,7 @@ def _build_pocket_gui_html(
     coord_ranges: dict = None,
 ) -> str:
     """Generate the self-contained HTML for the 3D Pocket Tuner."""
+    gui_max_box = max(max_box_dimension, 60.0)
     if coord_ranges is None:
         coord_ranges = {
             "min_x": initial_center[0] - 50.0,
@@ -439,11 +440,11 @@ def _build_pocket_gui_html(
 
       <!-- Size (X, Y, Z) Controls -->
       <div class="card">
-        <div class="card-title">Box Size (Å) — Max {max_box_dimension:.0f} Å</div>
+        <div class="card-title">Box Size (Å) — Max {gui_max_box:.0f} Å</div>
         <div class="ctrl-row">
           <span class="ctrl-label">Size X</span>
-          <input type="range" id="slider_sx" class="ctrl-slider" min="5.0" max="45.0" step="0.5" value="{initial_size[0]}" oninput="syncFromSlider('sx')"/>
-          <input type="number" id="input_sx" class="ctrl-input" step="0.5" min="5.0" max="50.0" value="{initial_size[0]:.1f}" onchange="syncFromInput('sx')"/>
+          <input type="range" id="slider_sx" class="ctrl-slider" min="5.0" max="{gui_max_box:.1f}" step="0.5" value="{initial_size[0]}" oninput="syncFromSlider('sx')"/>
+          <input type="number" id="input_sx" class="ctrl-input" step="0.5" min="5.0" max="{gui_max_box:.1f}" value="{initial_size[0]:.1f}" onchange="syncFromInput('sx')"/>
           <div class="step-btn-group">
             <button type="button" class="step-btn" onclick="adjustValue('sx', -2.0)">-2</button>
             <button type="button" class="step-btn" onclick="adjustValue('sx', 2.0)">+2</button>
@@ -452,8 +453,8 @@ def _build_pocket_gui_html(
 
         <div class="ctrl-row">
           <span class="ctrl-label">Size Y</span>
-          <input type="range" id="slider_sy" class="ctrl-slider" min="5.0" max="45.0" step="0.5" value="{initial_size[1]}" oninput="syncFromSlider('sy')"/>
-          <input type="number" id="input_sy" class="ctrl-input" step="0.5" min="5.0" max="50.0" value="{initial_size[1]:.1f}" onchange="syncFromInput('sy')"/>
+          <input type="range" id="slider_sy" class="ctrl-slider" min="5.0" max="{gui_max_box:.1f}" step="0.5" value="{initial_size[1]}" oninput="syncFromSlider('sy')"/>
+          <input type="number" id="input_sy" class="ctrl-input" step="0.5" min="5.0" max="{gui_max_box:.1f}" value="{initial_size[1]:.1f}" onchange="syncFromInput('sy')"/>
           <div class="step-btn-group">
             <button type="button" class="step-btn" onclick="adjustValue('sy', -2.0)">-2</button>
             <button type="button" class="step-btn" onclick="adjustValue('sy', 2.0)">+2</button>
@@ -462,8 +463,8 @@ def _build_pocket_gui_html(
 
         <div class="ctrl-row">
           <span class="ctrl-label">Size Z</span>
-          <input type="range" id="slider_sz" class="ctrl-slider" min="5.0" max="45.0" step="0.5" value="{initial_size[2]}" oninput="syncFromSlider('sz')"/>
-          <input type="number" id="input_sz" class="ctrl-input" step="0.5" min="5.0" max="50.0" value="{initial_size[2]:.1f}" onchange="syncFromInput('sz')"/>
+          <input type="range" id="slider_sz" class="ctrl-slider" min="5.0" max="{gui_max_box:.1f}" step="0.5" value="{initial_size[2]}" oninput="syncFromSlider('sz')"/>
+          <input type="number" id="input_sz" class="ctrl-input" step="0.5" min="5.0" max="{gui_max_box:.1f}" value="{initial_size[2]:.1f}" onchange="syncFromInput('sz')"/>
           <div class="step-btn-group">
             <button type="button" class="step-btn" onclick="adjustValue('sz', -2.0)">-2</button>
             <button type="button" class="step-btn" onclick="adjustValue('sz', 2.0)">+2</button>
@@ -498,6 +499,7 @@ def _build_pocket_gui_html(
     let showPocketResidues = true;
     const proteinData = {protein_json};
     const detectedPockets = {pockets_json};
+    const guiMaxBox = {gui_max_box};
     const initialCenter = [{initial_center[0]}, {initial_center[1]}, {initial_center[2]}];
     const initialSize = [{initial_size[0]}, {initial_size[1]}, {initial_size[2]}];
 
@@ -694,15 +696,15 @@ def _build_pocket_gui_html(
       if (prop === "cx") cx = val;
       if (prop === "cy") cy = val;
       if (prop === "cz") cz = val;
-      if (prop === "sx") sx = Math.max(2.0, val);
-      if (prop === "sy") sy = Math.max(2.0, val);
-      if (prop === "sz") sz = Math.max(2.0, val);
+      if (prop === "sx") sx = Math.min(guiMaxBox, Math.max(2.0, val));
+      if (prop === "sy") sy = Math.min(guiMaxBox, Math.max(2.0, val));
+      if (prop === "sz") sz = Math.min(guiMaxBox, Math.max(2.0, val));
 
       let slider = document.getElementById("slider_" + prop);
       if (slider) {{
         if (val < parseFloat(slider.min)) slider.min = Math.floor(val - 10);
         if (val > parseFloat(slider.max)) slider.max = Math.ceil(val + 10);
-        slider.value = val;
+        slider.value = (prop.startsWith("c") ? val : Math.min(guiMaxBox, val));
       }}
 
       let badge = document.getElementById("pocket_badge");
@@ -721,7 +723,11 @@ def _build_pocket_gui_html(
       if (!input) return;
       let cur = parseFloat(input.value) || 0.0;
       let next = cur + delta;
-      input.value = (prop.startsWith("c") ? next.toFixed(3) : Math.max(2.0, next).toFixed(1));
+      if (prop.startsWith("c")) {{
+        input.value = next.toFixed(3);
+      }} else {{
+        input.value = Math.min(guiMaxBox, Math.max(2.0, next)).toFixed(1);
+      }}
       syncFromInput(prop);
     }}
 
@@ -1068,9 +1074,10 @@ def launch_pocket_gui(
 
     final_center, final_size = server.selected_coordinates
 
-    # Clamp box size
+    # Clamp box size (allow user to choose up to 60.0 Å in GUI tuner)
     from core.pocket_detection import _clamp_box_size, extract_pocket_residues
-    clamped_size, _ = _clamp_box_size(final_size, max_box_dimension, warn_large_boxes=False)
+    gui_max_box = max(max_box_dimension, 60.0)
+    clamped_size, _ = _clamp_box_size(final_size, gui_max_box, warn_large_boxes=False)
 
     residues = []
     if doc is not None:

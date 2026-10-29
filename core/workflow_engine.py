@@ -1431,6 +1431,10 @@ def _exec_pocket_detection(ctx: dict, config: DrugLabConfig) -> dict:
             "size": selected["size"],
         }
 
+        # Keep config.pocket.max_box_dimension in sync with custom box size
+        if "size" in selected and max(selected["size"]) > config.pocket.max_box_dimension:
+            config.pocket.max_box_dimension = float(max(selected["size"]))
+
         # Persist selected_pocket.json
         import os
         from utils.io import write_json

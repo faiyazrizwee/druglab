@@ -95,9 +95,10 @@ def detect_pockets(
             raise ValueError("manual_center and manual_size must be specified in 'manual' mode.")
         logger.info(f"Manual pocket mode: center={manual_center}, size={manual_size}")
 
-        # Clamp manual size
+        # Clamp manual size (allow user to specify up to 60.0 Å for custom pockets)
+        manual_max = max(max_box_dimension, 60.0)
         clamped_size, warnings = _clamp_box_size(
-            list(manual_size), max_box_dimension, warn_large_boxes
+            list(manual_size), manual_max, warn_large_boxes
         )
         box_warnings.extend(warnings)
 
@@ -447,8 +448,9 @@ def _collect_manual_pocket(
     center = [coords["center_x"], coords["center_y"], coords["center_z"]]
     size = [coords["size_x"], coords["size_y"], coords["size_z"]]
 
-    # Clamp to max_box_dimension
-    clamped_size, warnings = _clamp_box_size(size, max_box_dimension, warn_large_boxes)
+    # Clamp to max_box_dimension (allow user to specify up to 60.0 Å for custom pockets)
+    manual_max = max(max_box_dimension, 60.0)
+    clamped_size, warnings = _clamp_box_size(size, manual_max, warn_large_boxes)
     for w in warnings:
         print(f"  [!] {w}")
 
