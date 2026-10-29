@@ -42,6 +42,8 @@ CMD ["--help"]
 
 # ── Optional Target: Protein–Peptide Docking with LightDock ──
 FROM base AS peptide
-RUN conda run -n druglab pip install -e ".[peptide]"
+ENV CFLAGS="-Wno-incompatible-pointer-types"
+RUN conda run -n druglab pip install cython && \
+    CFLAGS="-Wno-incompatible-pointer-types" conda run -n druglab pip install --no-build-isolation -e ".[peptide]"
 ENTRYPOINT ["conda", "run", "--no-capture-output", "-n", "druglab", "druglab"]
 CMD ["--help"]

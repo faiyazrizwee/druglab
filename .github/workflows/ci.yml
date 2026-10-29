@@ -32,12 +32,12 @@ jobs:
           conda install -y -c conda-forge \
             rdkit biopython gemmi numpy pandas scipy scikit-learn \
             openbabel openmm pdbfixer vina pytest pytest-cov matplotlib pyyaml
-          pip install jinja2 plotly rich tqdm meeko
+          pip install jinja2 plotly rich tqdm meeko cython
 
       - name: Install DrugLab and Peptide Dependencies
         shell: bash -el {0}
         run: |
-          pip install -e ".[peptide]"
+          CFLAGS="-Wno-incompatible-pointer-types" pip install --no-build-isolation -e ".[peptide]"
 
       - name: Verify CLI Entry Points
         shell: bash -el {0}
