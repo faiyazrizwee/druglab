@@ -37,7 +37,7 @@ jobs:
       - name: Install DrugLab and Peptide Dependencies
         shell: bash -el {0}
         run: |
-          CFLAGS="-Wno-incompatible-pointer-types" pip install --no-build-isolation lightdock
+          python utils/install_lightdock.py
           pip install --no-build-isolation --no-deps -e ".[peptide]"
 
       - name: Verify CLI Entry Points

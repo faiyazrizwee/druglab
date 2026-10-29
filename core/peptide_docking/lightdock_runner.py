@@ -69,7 +69,7 @@ def find_lightdock_executable(name: str = "lightdock3.py", user_path: str | None
 
     raise FileNotFoundError(
         f"LightDock executable '{name}' is not found in the environment.\n"
-        f"Please install LightDock using: pip install -e \".[peptide]\"\n"
+        f"Please install LightDock using: python utils/install_lightdock.py\n"
         f"or specify the executable path in the configuration."
     )
 

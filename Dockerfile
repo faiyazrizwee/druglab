@@ -42,9 +42,8 @@ CMD ["--help"]
 
 # ── Optional Target: Protein–Peptide Docking with LightDock ──
 FROM base AS peptide
-ENV CFLAGS="-Wno-incompatible-pointer-types"
 RUN conda run -n druglab pip install wheel setuptools cython freesasa prody && \
-    conda run -n druglab /bin/bash -c 'CFLAGS="-Wno-incompatible-pointer-types" pip install --no-build-isolation lightdock' && \
+    conda run -n druglab python utils/install_lightdock.py && \
     conda run -n druglab pip install --no-build-isolation --no-deps -e .
 ENTRYPOINT ["conda", "run", "--no-capture-output", "-n", "druglab", "druglab"]
 CMD ["--help"]

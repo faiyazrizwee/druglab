@@ -64,7 +64,7 @@ pip install -e .
 
 # Install optional Protein–Peptide Docking (LightDock) dependencies:
 pip install wheel setuptools cython freesasa prody
-CFLAGS="-Wno-incompatible-pointer-types" pip install --no-build-isolation lightdock
+python utils/install_lightdock.py
 pip install -e ".[peptide]"
 
 # Or install all optional components (ADMET-AI, OpenMM, LightDock, Dev):
