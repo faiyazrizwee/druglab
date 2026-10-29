@@ -1,0 +1,78 @@
+# DrugLab 2.0 — Peptide Docking Configuration (LightDock)
+# ========================================================
+
+workflow:
+  mode: peptide
+
+protein:
+  input: null                      # Path to receptor PDB file or 4-letter PDB ID
+  chains: []                       # Selected chain IDs (e.g. ['A']), empty list = all chains
+  water_policy: "remove_bulk"      # "remove_bulk" (keep interfacial <=4.5A), "keep_all", "remove_all"
+  keep_metals: true                # Retain coordinated metal ions (ZN, MG, CA, FE, etc.)
+  keep_cofactors: true             # Retain bound organic cofactors (ATP, NAD, HEM, etc.)
+  keep_heteroatoms: true           # Retain biologically relevant heteroatoms
+  remove_waters: true              # Legacy alias for water removal
+  remove_hydrogens: false          # Keep hydrogens or let LightDock handle
+  ph: 7.4                          # pH for protonation when prepared
+
+peptide:
+  fasta: null                      # Path to peptide FASTA file
+  sequence: null                   # Raw amino-acid sequence (1-letter code, e.g. "ACDEF")
+  structure: null                  # Pre-existing validated peptide PDB structure (preferred if available)
+  allow_nonstandard_residues: false
+  n_term_cap: "zwitterion"         # "zwitterion" (default -NH3+), "ace" (acetylated), "free"
+  c_term_cap: "zwitterion"         # "zwitterion" (default -COO-), "nhe" (amidated), "free"
+  is_cyclic: false                 # Head-to-tail backbone cyclization flag
+  conformers: 1                    # Number of 3D starting conformers generated per sequence
+  minimize: true                   # Energy minimize generated conformations
+  forcefield: "MMFF94"             # Force field for minimization: MMFF94 or UFF
+  seed: 42
+
+filtering:
+  enabled: true
+  min_length_aa: 5                 # Recommended minimum amino acid length (warnings only)
+  max_length_aa: 30                # Recommended maximum amino acid length (warnings only)
+  warn_on_length: true             # Emit warning instead of rejecting peptides outside length bounds
+  max_mw: 4000.0                   # Maximum molecular weight (Da)
+  retain_filtered_candidates: true # Keep filtered peptides in TSV log and report
+
+admet:
+  enabled: true
+  provider: "local"                # "local" (Calculated descriptors, Caco-2, BBB, toxicity & MACCS similarity), "peplife", "none"
+  reference_library_path: null     # Optional path to custom peptide reference library (YAML/JSON/FASTA)
+  toxicity_model_enabled: true     # Enable peptide-specific hemolytic and membrane toxicity assessment
+  on_prediction_failure: "warn_and_continue"  # "warn_and_continue" or "fail"
+  max_instability_index: null      # Optional instability index cutoff (>40 often considered unstable)
+  max_gravy: null                  # Optional Grand Average of Hydropathicity cutoff
+
+binding_site:
+  mode: "auto"                     # "auto", "explicit", "pocket_guided", "global"
+  receptor_residues: []            # Explicit receptor residues (e.g. ["A.TYR.45", "A.GLU.23"])
+  peptide_residues: []             # Explicit peptide restraints (e.g. ["B.TRP.2"])
+  restraints_enabled: false        # Active flag for restraints
+  pocket_method: "geometric"       # Pocket detection method: "geometric", "reference_ligand", "manual"
+  reference_ligand: null           # Reference ligand PDB/SDF for pocket-guided interface
+  pocket_cutoff_distance: 6.0      # Cutoff distance (Å) to identify interface residues
+
+lightdock:
+  executable: null                 # Path to lightdock3.py or null for auto-discovery
+  preset: "fast"                   # Sampling preset: "fast", "balanced", "thorough"
+  scoring_function: "fastdfire"    # Scoring function: fastdfire, dfire, cpydock, tobi
+  swarms: null                     # Explicit swarms count (overrides preset if set)
+  glowworms: 50                    # Glowworms per swarm (default: 50 for fast, 100 for thorough)
+  steps: null                      # Explicit simulation steps (overrides preset if set)
+  anm: false                       # Backbone flexibility with ANM (normal modes)
+  timeout_seconds: 3600            # Per-candidate docking timeout
+  seed: 42                         # Simulation random seed
+
+resources:
+  max_parallel_jobs: 1             # Concurrent docking jobs
+  max_cpu_processes: 4             # CPU cores for LightDock execution
+
+report:
+  html: true                       # Generate standalone interactive HTML report
+  interactive_3d: true             # Embed 3Dmol.js viewer for receptor-peptide poses
+  title: "DrugLab Peptide Docking Report"
+
+output:
+  directory: "results"             # Base output directory

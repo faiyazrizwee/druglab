@@ -13,11 +13,14 @@ dependencies:
   - openmm
   - pandas
   - pdbfixer
+  - pyyaml
   - rdkit
   - scikit-learn
   - scipy
   - seaborn
   - vina
+  - pytest
+  - pytest-cov
   - pip
 
   - pip:

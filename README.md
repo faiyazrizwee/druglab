@@ -1,465 +1,373 @@
-# DrugLab
+# DrugLab 2.0
 
-**A lightweight command-line platform for computational drug discovery, virtual screening, lead identification, and lead optimization.**
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![Tests](https://img.shields.io/badge/tests-94%20passed-brightgreen.svg)](tests/)
+[![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](Dockerfile)
 
-DrugLab runs locally on standard research computers (16 GB RAM laptops) without requiring GPUs, cloud services, or web servers.
+**A lightweight, modular computational drug-discovery platform featuring dual docking pipelines:**
+1. **Small-Molecule–Protein Docking & Optimization** powered by **AutoDock Vina**
+2. **Protein–Peptide Docking** powered by **LightDock** (Glowworm Swarm Optimization)
+
+DrugLab runs locally on standard research workstations and laptops without requiring GPUs, external cloud services, or paid platforms.
 
 ---
 
-## Features
+## Dual Docking Pipelines
 
-### Drug Selection Workflow
-
-Identify promising lead molecules from a ligand library against a protein target.
-
-- **Protein Preparation** — Clean PDB, fix missing residues/atoms, add hydrogens, convert to PDBQT
-- **Binding Pocket Detection** — Geometric cavity detection, ligand-based, or manual box definition
-- **Ligand Preparation** — Sanitize, generate 3D conformers, compute charges, convert to PDBQT
-- **Drug-Likeness Screening** — Lipinski, Veber, Ghose, Egan, Muegge, PAINS, Brenk filters
-- **ADMET Screening** — Absorption, Distribution, Metabolism, Excretion, Toxicity prediction
-- **Molecular Docking** — AutoDock Vina binding affinity calculation
-- **Lead Selection** — Multi-criteria ranking with composite scoring
-
-### Lead Optimization Workflow
-
-Optimize a lead molecule by generating and evaluating structural analogues.
-
-- **Analogue Generation** — Bioisosteric replacement, scaffold hopping, R-group enumeration
-- **Drug-Likeness Evaluation** — Filter analogues by drug-likeness rules
-- **ADMET Evaluation** — Predict pharmacokinetic and safety properties
-- **Docking Validation** — Compare analogue binding affinities to original lead
-- **Candidate Ranking** — Multi-objective ranking of optimized candidates
-
-### Design Principles
-
-- **Local execution** — No cloud, no GPU, no internet required at runtime
-- **Reproducible workflows** — Config snapshots saved with every run
-- **Modular architecture** — Every module runs independently
-- **Fully automated** — Run entire pipeline with a single command
-- **Step-by-step** — Stop after any stage, inspect, modify, and resume
-- **Manual parameter control** — Override any parameter via CLI or config file
-- **Extensible** — Clean interfaces for future ML models and MD simulations
+```
+DrugLab 2.0
+├── Option 1: Small-Molecule Virtual Screening & Lead Optimization (AutoDock Vina)
+│   ├── Target Protein Preparation (PDBFixer / PDBQT)
+│   ├── Binding Pocket Detection & 3D Interactive Tuner
+│   ├── Small-Molecule Ligand Preparation (RDKit / Meeko)
+│   ├── Drug-Likeness Filters (Lipinski, Veber, PAINS, Brenk)
+│   ├── ADMET Risk Scoring (ADMET-AI / RDKit)
+│   ├── AutoDock Vina Docking & Pose Clustering
+│   ├── Multi-Criteria Lead Selection (TOPSIS / Weighted Sum)
+│   ├── Lead Optimization (Bioisosteres, Scaffold Hopping, Pareto Ranking)
+│   └── Interactive Standalone HTML Report
+│
+└── Option 2: Protein–Peptide Docking (LightDock)
+    ├── Target Receptor Ingestion & Validation
+    ├── Protein Preparation specifically tailored for LightDock
+    ├── Peptide Input (FASTA, Plain Sequence, or Existing PDB Structure)
+    ├── Peptide Length & Size Filtering (Configurable thresholds + TSV audit)
+    ├── Peptide ADMET & Physicochemical Profiling (pI, Net Charge, GRAVY, Instability, Boman index)
+    ├── Peptide 3D Structural Modeling (ETKDGv3 + MMFF94 force-field minimization)
+    ├── Binding-Site Selection & Restraints (Explicit, Pocket-guided, or Global search)
+    ├── LightDock Docking Engine (Glowworm Swarm Optimization: fastdfire, dfire, cpydock, tobi)
+    ├── Pose Structural Analysis (Clashes, Contacts, H-Bonds, Salt bridges, Interface residues)
+    ├── Multi-Metric Candidate Ranking
+    └── Standalone Interactive HTML Report with 3Dmol.js Complex Viewer
+```
 
 ---
 
 ## Installation
 
-### Using Docker
+### Option 1: Conda Environment (Recommended)
 
-Build the Docker image locally:
-
-```bash
-docker build -t druglab:latest .
-```
-
-Run DrugLab using Docker (mount your directories so the container can read and write files):
+Conda easily manages cheminformatics and biophysical compiled C-extensions:
 
 ```bash
-docker run --rm \
-    -v $(pwd)/protein:/app/protein \
-    -v $(pwd)/ligands:/app/ligands \
-    -v $(pwd)/output:/app/output \
-    druglab:latest run \
-    --protein protein/4MZI.pdb \
-    --library ligands/ \
-    --output-dir output
-```
+# Clone the repository
+git clone https://github.com/faiyazrizwee/druglab.git
+cd druglab
 
-### Using Conda (Recommended)
-
-```bash
+# Create and activate environment
 conda env create -f environment.yml
 conda activate druglab
+
+# Install DrugLab core package in editable mode
+pip install -e .
+
+# Install optional Protein–Peptide Docking (LightDock) dependencies:
+pip install wheel setuptools cython freesasa prody
+python utils/install_lightdock.py
+pip install -e ".[peptide]"
+
+# Or install all optional components (ADMET-AI, OpenMM, LightDock, Dev):
+pip install -e ".[all]"
 ```
 
-### Using pip
+### Option 2: Pip-Only Installation
 
 ```bash
+# Install core dependencies
 pip install -r requirements.txt
+
+# Install DrugLab with peptide docking dependencies
+pip install -e ".[peptide]"
 ```
 
-### Verify Installation
+### Option 3: Docker Container
+
+A multi-platform containerized environment supporting both small-molecule and peptide workflows:
 
 ```bash
-python druglab.py --help
+# Build standard image (Small-molecule workflow)
+docker build -t druglab:latest .
+
+# Build peptide-enabled image (LightDock included)
+docker build --target peptide -t druglab:peptide .
+
+# Run DrugLab interactive mode:
+docker run -it --rm \
+    -v $(pwd)/protein:/app/protein \
+    -v $(pwd)/results:/app/results \
+    druglab:peptide
 ```
 
 ---
 
-## Quick Start
+## Quick Start & Usage
 
-### Run Complete Drug Selection
+### 1. Interactive Dual-Pipeline Selector
+
+Run `druglab` with no arguments in any interactive terminal to open the top-level workflow selector:
 
 ```bash
-python druglab.py run \
+$ druglab
+
+DrugLab 2.0
+===========
+
+Select docking workflow:
+
+  1. Small-molecule–protein docking (Virtual screening & Lead optimization)
+  2. Protein–peptide docking (LightDock engine)
+  3. Exit
+
+Enter choice [1-3] (default: 1):
+```
+
+### 2. Protein–Peptide Docking Workflow
+
+#### Via `druglab run --mode peptide`
+
+```bash
+# Fast exploratory peptide docking from sequence
+druglab run \
+    --mode peptide \
+    --protein protein/3DWT.pdb \
+    --peptide-seq ACDEFGH \
+    --preset fast \
+    --output-dir results
+
+# Batch virtual screening from a multi-peptide FASTA library (or directory of FASTA files)
+druglab run \
+    --mode peptide \
+    --protein protein/3DWT.pdb \
+    --peptide-fasta library_peptides.fasta \
+    --admet-provider peplife \
+    --preset fast \
+    --output-dir results
+```
+
+#### Via Dedicated `druglab peptide` Modular Subcommands
+
+```bash
+# 1. Full pipeline run (Protein Prep → Peptide Prep → Pocket → ADMET → Docking → Leads)
+druglab peptide run \
+    --protein protein/3DWT.pdb \
+    --sequence WYVIK \
+    --preset fast \
+    --output-dir results
+
+# 2. Receptor protein inspection & preparation for LightDock
+druglab peptide protein-prepare \
+    --protein protein/3DWT.pdb \
+    --chains A \
+    --water-policy remove_bulk \
+    --output-dir results/prepared_proteins
+
+# 3. Peptide ligand preparation (zwitterion default, capped ACE/NHE, cyclic)
+druglab peptide prepare \
+    --sequence ACDEFGH \
+    --n-term zwitterion \
+    --c-term zwitterion \
+    --output-dir results/prepared_peptides
+
+# 4. Cavity detection & interactive 3D box tuner GUI → LightDock restraints
+druglab peptide pocket \
+    --protein results/prepared_proteins/3DWT_prepared.pdb \
+    --auto-confirm \
+    --output-dir results/pocket
+
+# 5. Peptide ADMET, barrier permeability & safety screening
+druglab peptide admet \
+    --sequence "ACDEFGH,CYIQNCPLG" \
+    --provider local \
+    --output-dir results/admet
+
+# 6. LightDock docking execution
+druglab peptide dock \
+    --protein results/prepared_proteins/3DWT_prepared.pdb \
+    --peptide results/prepared_peptides/peptide_peptide_1.pdb \
+    --restraints results/pocket/restraints.list \
+    --preset fast \
+    --output-dir results/docking
+
+# 7. Multi-objective lead ranking & triage
+druglab peptide select-leads \
+    --run-dir results/peptide_run_20261029_214703 \
+    --top-n 5
+
+# 8. Regenerate interactive HTML report
+druglab peptide report \
+    --input results/peptide_run_20261029_214703 \
+    --output report.html
+```
+
+### 3. Small-Molecule Virtual Screening & Lead Optimization
+
+100% backward compatible with existing DrugLab pipelines:
+
+```bash
+# Default mode is small-molecule
+druglab run \
+    --protein protein/4MZI.pdb \
+    --library ligands/ \
+    --output-dir output
+
+# Or explicitly specified
+druglab run \
+    --mode small-molecule \
     --protein protein/4MZI.pdb \
     --library ligands/ \
     --output-dir output
 ```
 
-This runs the full pipeline: protein preparation → pocket detection → ligand preparation → drug-likeness → ADMET → docking → lead selection.
+---
 
-### Run Complete Lead Optimization
+## Peptide Docking Technical Architecture
 
-```bash
-python druglab.py optimize \
-    --lead output/lead_selection/leads.sdf \
-    --protein output/protein_preparation/protein.pdbqt \
-    --box output/pocket_detection/docking_box.json \
-    --output-dir output
-```
+### 1. Peptide Structural Modeling
+Peptide sequences are constructed using RDKit, parameterized with hydrogens, embedded in 3D using ETKDGv3, and energy-minimized using the **MMFF94** force field. Heavy-atom PDB structures with standard stereochemistry and atom naming are produced for LightDock. Pre-existing validated PDB structures can also be provided directly via `--structure`.
+
+### 2. Peptide ADMET, Permeability & Safety Profiling
+- **Local Peptide ADMET Engine (Default)**: Comprehensive, offline-capable peptide profiling engine built on RDKit and BioPython ProtParam:
+  - **Calculated Descriptors**: Molecular Weight (MW), Wildman-Crippen LogP, H-Bond Donors (HBD), H-Bond Acceptors (HBA), and Topological Polar Surface Area (TPSA).
+  - **Reference Library Similarity**: MACCS-166 Tanimoto fingerprint similarity against a configurable clinical peptide reference panel (Octreotide, Leuprolide, Oxytocin, Vasopressin, Bivalirudin, Exenatide, Glucagon, Pramlintide, Ziconotide, Semaglutide).
+  - **Biological Half-Life**: Predicted in vitro/in vivo half-life based on N-terminal degradation rules and Guruprasad instability indices.
+  - **Membrane Permeability Models**: Literature-validated permeability predictors (PMID 39031123, 40134508, 9090704) covering Caco-2 (linear, cyclic, and all-peptide models), PAMPA for cyclic peptides, and RRCK for cyclic peptides. Unavailable/inapplicable endpoints clearly reported as `N/A`.
+  - **Blood-Brain Barrier (BBB)**: Qualitative BBB penetration prediction (`BBB+` / `BBB-`) using SCMB3PP dipeptide propensities and BBB shuttle motif detection (PMID 36284036, 38637801).
+  - **Peptide-Specific Toxicity Assessment**: Validated hemolytic and membrane-disruptive risk assessment (PMID 32145017, 39905233) without applying small-molecule toxicity classifiers; reports `toxicity undetermined` when outside the validated domain.
+- **PEPLife / PEPLife 2.0**: Specialized peptide biological half-life and proteolytic degradation database profiling enriched with local descriptor models.
+- **Flexible Peptide Lengths & Diagnostics**: The rigid length filter is removed to allow docking of peptides of any length. Advisory warnings are displayed on the terminal, diagnostic logs, and interactive HTML reports whenever sequence length falls outside the recommended range (5–30 AA).
+- **Provider Selection**: Select via interactive prompt or CLI flags (`--admet-provider {local,peplife,none}`).
+
+### 3. Binding-Site Modes & LightDock Restraints
+- **`explicit`**: Validates user-supplied residue identifiers (e.g. `A.TYR.45`) against the prepared receptor structure and writes `restraints.list`.
+- **`pocket_guided`**: Maps DrugLab geometric pocket cavities or contact residues from a co-crystallized reference ligand onto the receptor surface.
+- **`global`**: Unrestrained surface sampling across the entire receptor using Glowworm Swarm Optimization.
+
+### 4. Sampling Presets
+| Preset | Swarms | Simulation Steps | Glowworms / Swarm | Intended Use |
+|---|---|---|---|---|
+| `fast` | 10 | 10 | 50 | Rapid smoke tests & exploratory screening |
+| `balanced` | 30 | 25 | 50 | Routine candidate comparison |
+| `thorough` | 100 | 50 | 100 | In-depth candidate pose refinement |
+
+Supported scoring functions include `fastdfire` (default), `dfire`, `cpydock`, and `tobi`.
+
+### 5. Interactive Standalone HTML Report
+Both the small-molecule (`summary.html`) and peptide docking reports (`report.html`) are fully self-contained and feature:
+- **Executive KPI Cards**: Receptor target, total candidates screened, filter attrition, and best binding affinities / docking scores.
+- **Interactive 3D Complex Viewer**: Powered by **3Dmol.js** with cartoon, surface, ribbon, stick, and wireframe representation controls, palette selectors, camera zoom (`Focus Ligand` / `Focus Peptide`), and pose selection.
+- **Pure Shape-Based Hover Interactivity Engine**:
+  - Hovering any amino acid residue or ligand atom immediately renders a prominent glowing ball-and-stick highlight (`#f6e05e`) directly in 3D without tearing down WebGL geometry.
+  - Automatically classifies non-covalent interactions (Salt Bridge, Hydrogen Bond, Cation–$\pi$, $\pi$–$\pi$ Stacking, Hydrophobic, Van der Waals, and Steric Clashes) with distance in Å.
+  - Draws a pulsing partner sphere and a dashed 3D connector cylinder between contacting heavy atoms.
+  - Displays an in-canvas 3D floating label and updates a sleek bottom HUD banner with residue names, interaction badges, and partner details.
+- **Ranked Results & Pose Metrics Table**: Binding energies, inter-chain contacts (<4.5 Å), hydrogen bonds (<3.5 Å), steric clashes (<2.0 Å), and safety liabilities.
+- **ADMET & Filtering Diagnostics**: Complete audit log recording length, molecular weight, predicted permeability, and stability.
+- **Run Manifest**: Cryptographic checksums of inputs, software versions, random seeds, and parameters for full scientific reproducibility.
 
 ---
 
-## Usage
-
-### Individual Modules
-
-Every module can be run independently. Outputs are saved as files that can be inspected, modified, and fed into subsequent stages.
-
-#### Protein Preparation
-
-```bash
-python druglab.py protein prepare \
-    --input protein/7DTD.pdb \
-    --chain A \
-    --ph 7.4 \
-    --output-dir output
-```
-
-Output: `output/protein_preparation/protein_clean.pdb`, `protein.pdbqt`
-
-#### Pocket Detection
-
-```bash
-# Automatic geometric detection
-python druglab.py pocket detect \
-    --protein output/protein_preparation/protein_clean.pdb
-
-# Using a reference ligand
-python druglab.py pocket detect \
-    --protein output/protein_preparation/protein_clean.pdb \
-    --method ligand_based \
-    --reference-ligand reference_ligand.sdf
-
-# Manual box definition
-python druglab.py pocket detect \
-    --protein output/protein_preparation/protein_clean.pdb \
-    --method manual \
-    --center 12.3 45.6 78.9 \
-    --size 20.0 20.0 20.0
-```
-
-Output: `output/pocket_detection/docking_box.json`, `pockets.json`
-
-#### Ligand Preparation
-
-```bash
-# From directory of SDF files
-python druglab.py ligand prepare \
-    --input ligands/
-
-# From single SDF file
-python druglab.py ligand prepare \
-    --input ligands/apigenin.sdf
-```
-
-Output: `output/ligand_preparation/prepared_ligands.sdf`, `ligands_pdbqt/`
-
-#### Drug-Likeness Screening
-
-```bash
-python druglab.py screen druglikeness \
-    --input output/ligand_preparation/prepared_ligands.sdf \
-    --rules lipinski veber pains
-```
-
-Output: `output/druglikeness/passed_ligands.sdf`, `descriptors.csv`
-
-#### ADMET Screening
-
-```bash
-python druglab.py screen admet \
-    --input output/druglikeness/passed_ligands.sdf
-```
-
-Output: `output/admet/passed_ligands.sdf`, `admet_results.csv`
-
-#### Molecular Docking
-
-```bash
-python druglab.py dock \
-    --protein output/protein_preparation/protein.pdbqt \
-    --ligands output/admet/passed_ligands.sdf \
-    --box output/pocket_detection/docking_box.json \
-    --exhaustiveness 32 \
-    --n-poses 10
-```
-
-Output: `output/docking/docking_results.csv`, `poses/`, `best_poses.sdf`
-
-#### Lead Selection
-
-```bash
-python druglab.py select \
-    --docking-results output/docking/docking_results.csv \
-    --admet-results output/admet/admet_results.csv \
-    --druglikeness-results output/druglikeness/descriptors.csv \
-    --top-n 5
-```
-
-Output: `output/lead_selection/leads.sdf`, `ranking.csv`
-
-### Stop-and-Resume Workflows
-
-Run the pipeline up to a specific stage:
-
-```bash
-python druglab.py run \
-    --protein protein/7DTD.pdb \
-    --library ligands/ \
-    --stop-after ligand_preparation
-```
-
-Inspect outputs, modify parameters, then resume:
-
-```bash
-python druglab.py run \
-    --protein protein/7DTD.pdb \
-    --library ligands/ \
-    --resume druglikeness
-```
-
-Run a specific range of stages:
-
-```bash
-python druglab.py run \
-    --protein protein/7DTD.pdb \
-    --library ligands/ \
-    --resume druglikeness \
-    --stop-after admet
-```
-
-### Reports & Output Data
-
-Reports (such as `docking_report.json` and `lead_selection_report.json`) are automatically saved as JSON files in their respective output subdirectories. A unified HTML report generator CLI is planned for v0.2.
-
-### Configuration
-
-Override defaults with a YAML config file:
-
-```bash
-python druglab.py run \
-    --protein protein/7DTD.pdb \
-    --library ligands/ \
-    --config configs/my_config.yml
-```
-
-See `configs/default.yml` for all available options.
-
----
-
-## Configuration
-
-DrugLab uses a layered configuration system:
-
-```
-CLI flags  →  User config YAML  →  Default config YAML  →  Hardcoded defaults
-```
-
-Higher priority overrides lower. Every run saves a `config_snapshot.yml` for reproducibility.
-
-### Example Config
+## Configuration Reference (`configs/peptide_docking.yaml`)
 
 ```yaml
-project:
-  name: "gaba_a_screening"
-  output_dir: "output"
+workflow:
+  mode: peptide
 
-protein_preparation:
-  remove_water: true
-  add_hydrogens: true
+protein:
+  input: null
+  chains: []
+  remove_waters: true
+  remove_hydrogens: false
+  keep_heteroatoms: false
   ph: 7.4
-  chain_id: "A"
 
-pocket_detection:
-  method: "geometric"
-  padding: 10.0
-
-docking:
-  exhaustiveness: 32
-  n_poses: 10
+peptide:
+  fasta: null
+  sequence: null
+  structure: null
+  allow_nonstandard_residues: false
+  conformers: 1
+  minimize: true
+  forcefield: "MMFF94"
   seed: 42
 
-druglikeness:
-  rules:
-    - lipinski
-    - veber
-    - pains
-  max_violations: 1
+filtering:
+  enabled: true
+  min_length_aa: 5
+  max_length_aa: 30
+  max_mw: 4000.0
+  retain_filtered_candidates: true
 
-lead_selection:
-  top_n: 5
-  scoring_method: "weighted_sum"
-  weights:
-    affinity: 0.5
-    admet: 0.3
-    druglikeness: 0.2
+admet:
+  enabled: true
+  provider: "local"
+  on_prediction_failure: "warn_and_continue"
+
+binding_site:
+  mode: "auto"
+  receptor_residues: []
+  peptide_residues: []
+  restraints_enabled: false
+  pocket_method: "geometric"
+  pocket_cutoff_distance: 6.0
+
+lightdock:
+  executable: null
+  preset: "fast"
+  scoring_function: "fastdfire"
+  swarms: null
+  glowworms: 50
+  steps: null
+  anm: false
+  timeout_seconds: 3600
+  seed: 42
+
+resources:
+  max_parallel_jobs: 1
+  max_cpu_processes: 4
+
+report:
+  html: true
+  interactive_3d: true
+  title: "DrugLab Peptide Docking Report"
 ```
 
 ---
 
-## Architecture
+## Automated Testing
 
-```
-druglab/
-├── druglab.py                  # CLI entry point
-├── configs/                    # Configuration files
-│   └── default.yml
-├── core/                       # Computational engines
-│   ├── protein_preparation.py  # PDB cleaning & PDBQT conversion
-│   ├── pocket_detection.py     # Binding site detection
-│   ├── ligand_preparation.py   # Ligand prep & conformer generation
-│   ├── druglikeness.py         # Rule-based molecular filters
-│   ├── admet.py                # ADMET-AI predictions
-│   └── docking.py              # AutoDock Vina docking
-├── drug_selection/             # Workflow 1: Drug Selection
-│   ├── lead_selection.py       # Multi-criteria lead ranking
-│   └── workflow.py             # Pipeline orchestrator
-├── lead_optimization/          # Workflow 2: Lead Optimization
-│   ├── analogue_generation.py  # Structural analogue generation
-│   ├── screening.py            # Combined DL + ADMET screening
-│   ├── docking.py              # Analogue docking wrapper
-│   ├── admet.py                # Optimization-specific ADMET
-│   ├── ranking.py              # Final candidate ranking
-│   └── workflow.py             # Pipeline orchestrator
-├── utils/                      # Shared utilities
-│   ├── logger.py               # Rich logging
-│   ├── config.py               # Config loading & validation
-│   ├── io.py                   # File I/O helpers
-│   └── chemistry.py            # Shared chemistry utilities
-├── reports/                    # Report generation
-│   └── generator.py            # HTML/CSV/JSON reports
-├── tests/                      # Test suite
-├── examples/                   # Usage examples
-├── protein/                    # Input protein files
-└── ligands/                    # Input ligand library
-```
-
-### Workflow 1: Drug Selection
-
-```
-Protein (PDB)  ──→  Protein Preparation  ──→  Pocket Detection
-                                                      │
-Ligand Library ──→  Ligand Preparation  ──→  Drug-Likeness  ──→  ADMET
-                                                                    │
-                              Lead Selection  ←──  Docking  ←───────┘
-                                    │
-                              leads.sdf + ranking.csv
-```
-
-### Workflow 2: Lead Optimization
-
-```
-Lead Molecule  ──→  Analogue Generation  ──→  Screening (DL + ADMET)
-                                                      │
-Protein + Box  ──→  Docking  ←────────────────────────┘
-                       │
-                   Ranking  ──→  top_candidates.sdf
-```
-
----
-
-## Output Structure
-
-```
-output/
-├── config_snapshot.yml              # Reproducibility record
-├── logs/                            # Execution logs
-├── protein_preparation/             # Cleaned protein files
-├── pocket_detection/                # Detected pockets & docking box
-├── ligand_preparation/              # Prepared ligands & PDBQT files
-├── druglikeness/                    # Screening results & descriptors
-├── admet/                           # ADMET predictions
-├── docking/                         # Docking scores & poses
-├── lead_selection/                  # Final leads & rankings
-├── analogue_generation/             # Generated analogues
-├── screening/                       # Analogue screening results
-├── analogue_docking/                # Analogue docking results
-├── ranking/                         # Final optimization ranking
-└── reports/                         # HTML/CSV/JSON reports
-```
-
----
-
-## Dependencies
-
-| Package | Purpose |
-|---|---|
-| RDKit | Cheminformatics, descriptors, molecular manipulation |
-| Biopython | PDB parsing and structure manipulation |
-| PDBFixer | Missing residue and atom repair |
-| Meeko | RDKit-to-PDBQT conversion for AutoDock |
-| Gemmi | Crystallographic data and PDB processing |
-| Open Babel | Molecular format conversion |
-| AutoDock Vina | Molecular docking engine |
-| ADMET-AI | ADMET property prediction |
-| Pandas | Data manipulation and analysis |
-| NumPy | Numerical computations |
-| scikit-learn | Score normalization and clustering |
-| Rich | Terminal output formatting and logging |
-| Plotly | Interactive charts for reports |
-| pymoo | Multi-objective optimization (Pareto ranking) |
-
----
-
-## Testing
+DrugLab maintains 94 automated tests across unit and integration categories:
 
 ```bash
-# Run all tests
-pytest tests/ -v
+# Run fast default unit tests (excluding real integration tests)
+pytest -m "not integration"
 
-# Run specific module tests
-pytest tests/test_druglikeness.py -v
+# Run real LightDock integration smoke test
+pytest -m integration
 
-# Run with coverage
-pytest tests/ --cov=core --cov=drug_selection --cov=lead_optimization --cov-report=html
+# Run full test suite with test coverage
+pytest tests/ -v --cov=core --cov=drug_selection --cov=lead_optimization --cov=utils --cov=reports
 ```
 
 ---
 
-## Roadmap
+## Scientific Caveats & Limitations
 
-### Current (v0.1)
-- [x] Project structure
-- [x] Core computational modules
-- [x] Drug Selection workflow
-- [x] Lead Optimization workflow
-- [x] CLI interface
-- [ ] Report generation (JSON reports completed, HTML generator planned)
-- [x] Test suite
+1. **Scoring Potentials vs. True Affinity**: LightDock scores (DFIRE, CPYDOCK, TOBI) are statistical or empirical interaction potentials. They do not equal experimentally measured thermodynamic binding constants ($K_d$ or $\Delta G$).
+2. **Peptide Conformational Flexibility**: High peptide flexibility is modeled using conformer ensembles and Glowworm Swarm Optimization; however, long or disordered peptides (>30 AA) may adopt solution ensembles beyond rigid or semi-flexible docking models.
+3. **Computational ADMET Predictions**: Predicted instability indices, Boman indices, and GRAVY hydropathicity values are sequence-derived empirical metrics and should be treated as guidance rather than clinical or experimental certainty.
 
-### Planned (v0.2+)
-- [ ] DeepChem / Chemprop ADMET backends
-- [ ] ChemBERTa / MolFormer property prediction
-- [ ] Molecular Dynamics refinement (OpenMM)
-- [ ] MM/GBSA binding free energy rescoring
-- [ ] Pharmacophore modeling
-- [ ] QSAR model training
-- [ ] Batch processing for large libraries
+---
+
+## Citations & Acknowledgments
+
+- **LightDock**: Jiménez-García B, Pons C, Fernández-Recio J. *LightDock: a new multi-scale approach to protein–protein docking.* Bioinformatics (2018).
+- **AutoDock Vina**: Eberhardt J, Santos-Martins D, Tillack AF, Forli S. *AutoDock Vina 1.2.0: New Docking Methods, Expanded Force Field, and Python Bindings.* J. Chem. Inf. Model. (2021).
+- **RDKit**: Landrum G, et al. *RDKit: Open-source cheminformatics.*
+- **3Dmol.js**: Rego N, Koes D. *3Dmol.js: molecular visualization without Java.* Bioinformatics (2015).
 
 ---
 
 ## License
 
-MIT License
-
----
-
-## Citation
-
-If you use DrugLab in your research, please cite:
-
-```
-DrugLab: A Lightweight Command-Line Platform for Computational Drug Discovery
-```
+DrugLab is licensed under the [MIT License](LICENSE).

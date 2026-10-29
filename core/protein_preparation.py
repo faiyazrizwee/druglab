@@ -33,7 +33,7 @@ logger = setup_logger("protein_preparation", level="INFO")
 
 # Standard residues recognized by PDBFixer
 from pdbfixer.pdbfixer import proteinResidues, dnaResidues, rnaResidues
-STANDARD_RESIDUES = set(proteinResidues).union(dnaResidues).union(rnaResidues).union({'N', 'UNK'})
+STANDARD_RESIDUES = set(proteinResidues).union(dnaResidues).union(rnaResidues).union({'ACE', 'NME'})
 
 
 def prepare_protein(
@@ -43,7 +43,7 @@ def prepare_protein(
     remove_water: bool = True,
     remove_heterogens: bool = True,
     add_hydrogens: bool = True,
-    fix_missing_residues: bool = True,
+    fix_missing_residues: bool = False,
     fix_missing_atoms: bool = True,
     ph: float = 7.4,
     keep_ligands: list[str] | None = None,
@@ -100,12 +100,16 @@ def prepare_protein(
         logger.info(f"Loading PDB: {input_pdb}")
         fixer = PDBFixer(filename=input_pdb)
 
-        # Force OpenMM to use the Reference platform (safer, robust, no OpenCL compiler hangs)
+        # Prefer optimized multi-threaded CPU platform (10x faster than scalar Reference), fall back to Reference
         try:
-            fixer.platform = openmm.Platform.getPlatformByName("Reference")
-            logger.debug("Using OpenMM Reference platform")
-        except Exception as plat_err:
-            logger.warning(f"Could not explicitly set Reference platform: {plat_err}")
+            fixer.platform = openmm.Platform.getPlatformByName("CPU")
+            logger.debug("Using OpenMM CPU platform")
+        except Exception:
+            try:
+                fixer.platform = openmm.Platform.getPlatformByName("Reference")
+                logger.debug("Using OpenMM Reference platform")
+            except Exception as plat_err:
+                logger.warning(f"Could not explicitly set platform: {plat_err}")
 
         # Record initial chains
         initial_chains = [c.id for c in fixer.topology.chains()]
@@ -116,10 +120,12 @@ def prepare_protein(
         if chain_id:
             logger.info(f"Selecting chain: {chain_id}")
             chains_list = list(fixer.topology.chains())
-            to_remove = [i for i, c in enumerate(chains_list) if c.id != chain_id]
-            if len(to_remove) == len(chains_list):
+            chain_ids_present = [c.id for c in chains_list]
+            if chain_id not in chain_ids_present:
                 raise ValueError(f"Selected chain '{chain_id}' not found in PDB. Available: {metrics['chains']}")
-            fixer.removeChains(to_remove)
+            to_remove = [c.id for c in chains_list if c.id != chain_id]
+            if to_remove:
+                fixer.removeChains(chainIds=list(set(to_remove)))
             logger.info(f"Removed other chains. Remaining chains: {[c.id for c in fixer.topology.chains()]}")
 
         # 2. Water / Heterogen Removal
@@ -147,6 +153,10 @@ def prepare_protein(
             logger.info(f"Deleting {len(to_delete)} unwanted residues (water count: {waters_count}, heterogen codes: {list(set(removed_hets))})")
             modeller = openmm.app.Modeller(fixer.topology, fixer.positions)
             modeller.delete(to_delete)
+            # Remove any empty chains left behind
+            empty_chains = [c for c in modeller.topology.chains() if len(list(c.residues())) == 0]
+            if empty_chains:
+                modeller.delete(empty_chains)
             fixer.topology = modeller.topology
             fixer.positions = modeller.positions
             metrics["removed_waters"] = waters_count
@@ -158,16 +168,44 @@ def prepare_protein(
         
         # If we do not want to fix missing residues (rebuilding massive loops),
         # we clear the dict.
+        MAX_LOOP_LENGTH = 10
         if not fix_missing_residues:
             logger.info("Skipping rebuilding of completely missing residues/loops (clearing missingResidues)")
             fixer.missingResidues = {}
         else:
             if fixer.missingResidues:
-                # Log the missing residues
-                chains = list(fixer.topology.chains())
-                missing_res_desc = [f"chain {chains[k[0]].id} index {k[1]} ({v})" for k, v in fixer.missingResidues.items()]
-                logger.info(f"Found {len(fixer.missingResidues)} missing residue segments to rebuild: {missing_res_desc[:5]}...")
-                metrics["fixed_residues"] = [f"{chains[k[0]].id}:{k[1]}" for k in fixer.missingResidues.keys()]
+                # Sanitize missingResidues:
+                # 1. Filter out invalid chain indices
+                # 2. Skip terminal regions (index 0 or >= len(residues)), which are expression tags or disordered tails
+                # 3. Skip loops longer than MAX_LOOP_LENGTH (10 residues) to avoid CPU minimization hangs
+                # 4. Filter out non-standard residue names (PDBFixer templates only support standard amino/nucleic acids)
+                chains_list = list(fixer.topology.chains())
+                valid_templates = set(getattr(fixer, "templates", {}).keys()) or STANDARD_RESIDUES
+                filtered_missing = {}
+                for (chain_idx, res_idx), res_names in fixer.missingResidues.items():
+                    if chain_idx >= len(chains_list):
+                        continue
+                    chain_res_count = len(list(chains_list[chain_idx].residues()))
+                    if res_idx == 0 or res_idx >= chain_res_count:
+                        logger.debug(f"Skipping terminal missing segment chain {chain_idx} at index {res_idx} ({len(res_names)} residues)")
+                        continue
+                    if len(res_names) > MAX_LOOP_LENGTH:
+                        logger.warning(
+                            f"Skipping long missing loop on chain {chains_list[chain_idx].id} at index {res_idx} "
+                            f"({len(res_names)} residues > max {MAX_LOOP_LENGTH}) to avoid minimization hang."
+                        )
+                        continue
+                    valid_res_names = [rn for rn in res_names if rn in valid_templates]
+                    if valid_res_names:
+                        filtered_missing[(chain_idx, res_idx)] = valid_res_names
+                fixer.missingResidues = filtered_missing
+
+                if fixer.missingResidues:
+                    missing_res_desc = [f"chain {chains_list[k[0]].id} index {k[1]} ({len(v)} res)" for k, v in fixer.missingResidues.items()]
+                    logger.info(f"Found {len(fixer.missingResidues)} short missing loop segment(s) to rebuild: {missing_res_desc}...")
+                    metrics["fixed_residues"] = [f"{chains_list[k[0]].id}:{k[1]}" for k in fixer.missingResidues.keys()]
+                else:
+                    logger.info("No short missing loop segments to rebuild (terminal tags and large unresolved regions skipped).")
 
         # Find non-standard residues and replace them (e.g. MSE to MET)
         fixer.findNonstandardResidues()
@@ -189,14 +227,34 @@ def prepare_protein(
         # Add the missing atoms & run minimization
         if fixer.missingAtoms or (fix_missing_residues and fixer.missingResidues):
             logger.info("Adding missing atoms and performing local energy minimization...")
-            fixer.addMissingAtoms()
-            logger.info("Missing atoms added successfully.")
+            try:
+                fixer.addMissingAtoms()
+                logger.info("Missing atoms added successfully.")
+            except Exception as exc:
+                logger.warning(f"Error rebuilding missing residues/atoms ({exc}). Retrying without loop rebuilding...")
+                fixer.missingResidues = {}
+                try:
+                    fixer.findMissingAtoms()
+                    fixer.addMissingAtoms()
+                    logger.info("Missing atoms of existing residues rebuilt successfully.")
+                except Exception as exc2:
+                    logger.warning(f"Could not rebuild missing atoms ({exc2}). Continuing with existing topology.")
+                    fixer.missingAtoms = {}
+                    fixer.missingTerminals = {}
 
         # 4. Add Hydrogens
         if add_hydrogens:
             logger.info(f"Adding missing hydrogens at pH {ph}...")
-            fixer.addMissingHydrogens(ph)
-            logger.info("Hydrogens added.")
+            try:
+                fixer.addMissingHydrogens(ph)
+                logger.info("Hydrogens added.")
+            except Exception as exc:
+                logger.warning(f"Could not add hydrogens at pH {ph} ({exc}). Retrying at pH 7.0...")
+                try:
+                    fixer.addMissingHydrogens(7.0)
+                    logger.info("Hydrogens added at neutral pH 7.0.")
+                except Exception as exc2:
+                    logger.warning(f"Hydrogen addition skipped due to error: {exc2}")
 
         # Save Cleaned PDB
         logger.info(f"Writing cleaned PDB to {clean_pdb_path}")

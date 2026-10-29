@@ -35,7 +35,9 @@ from utils.chemistry import (
     compute_tanimoto_similarity,
     calculate_basic_properties,
     deduplicate_mols,
+    embed_conformer_robust,
 )
+from utils.sascorer import calculate_sascore
 
 logger = setup_logger("analogue_generation", level="INFO")
 
@@ -66,6 +68,7 @@ def generate_analogues(
     max_analogues: int = 100,
     similarity_range: tuple[float, float] = (0.4, 0.9),
     mw_range: tuple[float, float] = (150.0, 600.0),
+    max_sascore: float = 6.0,
     custom_fragments: str | None = None,
 ) -> dict:
     """
@@ -139,7 +142,7 @@ def generate_analogues(
     all_analogues = deduplicate_mols(all_analogues)
     logger.info(f"After deduplication: {len(all_analogues)} unique analogues")
 
-    # Filter by similarity and MW
+    # Filter by similarity, MW, and Synthetic Accessibility (SAScore)
     filtered = []
     for mol in all_analogues:
         if mol is None:
@@ -147,15 +150,18 @@ def generate_analogues(
         try:
             sim = compute_tanimoto_similarity(mol, lead_mol_noH)
             mw = Descriptors.MolWt(mol)
-            if similarity_range[0] <= sim <= similarity_range[1] and \
-               mw_range[0] <= mw <= mw_range[1]:
+            sascore = calculate_sascore(mol)
+            if (similarity_range[0] <= sim <= similarity_range[1] and
+                mw_range[0] <= mw <= mw_range[1] and
+                sascore <= max_sascore):
                 mol.SetProp("similarity_to_lead", f"{sim:.3f}")
                 mol.SetProp("MW", f"{mw:.2f}")
+                mol.SetProp("SAScore", f"{sascore:.2f}")
                 filtered.append(mol)
         except Exception:
             pass
 
-    logger.info(f"After similarity/MW filter: {len(filtered)} analogues")
+    logger.info(f"After similarity/MW/SAScore filter: {len(filtered)} analogues")
 
     # Cap at max_analogues
     if len(filtered) > max_analogues:
@@ -167,13 +173,9 @@ def generate_analogues(
         name = f"analogue_{idx+1}"
         set_mol_name(mol, name)
 
-        # Add Hs and embed 3D
+        # Add Hs and embed 3D robustly
         mol_h = Chem.AddHs(mol)
-        try:
-            AllChem.EmbedMolecule(mol_h, randomSeed=42)
-            AllChem.MMFFOptimizeMolecule(mol_h)
-        except Exception:
-            pass
+        mol_h, _ = embed_conformer_robust(mol_h, num_confs=1, random_seed=42, energy_minimize=True)
 
         # Calculate properties
         props = calculate_basic_properties(mol)
@@ -198,6 +200,7 @@ def generate_analogues(
         "strategy_counts": strategy_counts,
         "total_before_filter": len(all_analogues),
         "total_generated": len(final_mols),
+        "max_sascore": max_sascore,
         "analogues_sdf": analogues_sdf_path,
         "duration": round(duration, 2),
         "status": "completed" if final_mols else "no_analogues",

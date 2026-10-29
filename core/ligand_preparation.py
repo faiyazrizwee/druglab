@@ -30,7 +30,9 @@ from utils.chemistry import (
     calculate_basic_properties,
     get_mol_name,
     set_mol_name,
+    embed_conformer_robust,
 )
+from utils.quarantine import quarantine_item
 
 logger = setup_logger("ligand_preparation", level="INFO")
 
@@ -124,25 +126,14 @@ def prepare_ligands(
 
                 # Generate 3D coordinates
                 if generate_3d:
-                    params = AllChem.ETKDGv3()
-                    params.randomSeed = 42
-                    embed_ids = AllChem.EmbedMultipleConfs(t_mol, numConfs=num_conformers, params=params)
-                    
-                    if len(embed_ids) == 0 or -1 in embed_ids:
-                        logger.warning(f"Standard 3D embedding failed for {t_name}, trying fallback parameters...")
-                        # Fallback simple embed
-                        AllChem.EmbedMolecule(t_mol, randomSeed=42)
-                    
-                    # Energy Minimize
-                    if energy_minimize:
-                        try:
-                            AllChem.MMFFOptimizeMoleculeConfs(t_mol, numThreads=0)
-                        except Exception as mmff_err:
-                            logger.warning(f"MMFF minimization failed for {t_name}: {mmff_err}. Trying UFF.")
-                            try:
-                                AllChem.UFFOptimizeMoleculeConfs(t_mol, numThreads=0)
-                            except Exception as uff_err:
-                                logger.warning(f"UFF minimization also failed for {t_name}: {uff_err}.")
+                    t_mol, embed_ok = embed_conformer_robust(
+                        t_mol,
+                        num_confs=num_conformers,
+                        random_seed=42,
+                        energy_minimize=energy_minimize,
+                    )
+                    if not embed_ok:
+                        logger.warning(f"3D coordinate generation used 2D fallback for {t_name}")
 
                 # Calculate basic descriptors
                 props = calculate_basic_properties(t_mol)
@@ -187,6 +178,13 @@ def prepare_ligands(
 
         except Exception as e:
             logger.error(f"Failed to prepare ligand {name}: {e}")
+            quarantine_item(
+                output_dir=output_dir,
+                stage="ligand_preparation",
+                mol_id=name,
+                reason=str(e),
+                details={"original_name": orig_name, "cid": cid},
+            )
             failed_ligands.append({
                 "name": name,
                 "error": str(e)

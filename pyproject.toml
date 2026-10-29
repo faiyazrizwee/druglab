@@ -1,0 +1,107 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "druglab"
+version = "0.2.1"
+description = "A lightweight command-line platform for computational drug discovery, virtual screening, lead identification, and lead optimization."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "DrugLab Team" }
+]
+keywords = [
+    "drug-discovery",
+    "computational-chemistry",
+    "cheminformatics",
+    "virtual-screening",
+    "molecular-docking",
+    "admet",
+    "lead-optimization",
+    "rdkit",
+    "autodock-vina"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "rdkit",
+    "numpy",
+    "pandas",
+    "scipy",
+    "scikit-learn",
+    "biopython",
+    "gemmi",
+    "meeko",
+    "vina",
+    "rich",
+    "plotly",
+    "matplotlib",
+    "jinja2",
+    "tqdm",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+admet = [
+    "admet-ai",
+]
+simulation = [
+    "openmm",
+    "pdbfixer",
+]
+peptide = [
+    "lightdock>=0.9.4",
+    "prody>=2.0.1",
+    "freesasa>=2.0.3",
+    "cython>=0.29.13",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+]
+all = [
+    "admet-ai",
+    "openmm",
+    "pdbfixer",
+    "pytest>=7.0",
+    "pytest-cov",
+    "pymoo",
+    "lightdock>=0.9.4",
+    "prody>=2.0.1",
+    "freesasa>=2.0.3",
+]
+
+[project.scripts]
+druglab = "druglab:main"
+
+[tool.setuptools]
+py-modules = ["druglab"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*", "drug_selection*", "lead_optimization*", "utils*", "reports*"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-v --tb=short"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+markers = [
+    "integration: marks tests as real integration tests requiring external dependencies (deselect with '-m \"not integration\"')",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]

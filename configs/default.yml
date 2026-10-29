@@ -7,8 +7,8 @@ protein_preparation:
   remove_water: true
   remove_heterogens: true
   add_hydrogens: true
-  fix_missing_residues: true
-  fix_missing_atoms: true
+  fix_missing_residues: false   # Rebuilding unresolved loops/tags is slow and unnecessary for docking
+  fix_missing_atoms: true      # Rebuild missing heavy atoms of existing residues (sidechains)
   ph: 7.4
   chain_id: null            # null = use all chains
   keep_ligands: []

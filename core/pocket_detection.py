@@ -95,9 +95,10 @@ def detect_pockets(
             raise ValueError("manual_center and manual_size must be specified in 'manual' mode.")
         logger.info(f"Manual pocket mode: center={manual_center}, size={manual_size}")
 
-        # Clamp manual size
+        # Clamp manual size (allow user to specify up to 60.0 Å for custom pockets)
+        manual_max = max(max_box_dimension, 60.0)
         clamped_size, warnings = _clamp_box_size(
-            list(manual_size), max_box_dimension, warn_large_boxes
+            list(manual_size), manual_max, warn_large_boxes
         )
         box_warnings.extend(warnings)
 
@@ -189,9 +190,14 @@ def detect_pockets(
         selected_pocket = best_pocket
         selection_method = "best_score"
 
+        if interactive:
+            selected_pocket, selection_method = prompt_pocket_confirmation_with_selection(
+                pockets, max_box_dimension=max_box_dimension, doc=doc, protein_pdb=protein_pdb
+            )
+
         docking_box = {
-            "center": best_pocket["center"],
-            "size": best_pocket["size"]
+            "center": selected_pocket["center"],
+            "size": selected_pocket["size"]
         }
     else:
         raise ValueError(f"Unknown pocket detection method: {method}")
@@ -442,8 +448,9 @@ def _collect_manual_pocket(
     center = [coords["center_x"], coords["center_y"], coords["center_z"]]
     size = [coords["size_x"], coords["size_y"], coords["size_z"]]
 
-    # Clamp to max_box_dimension
-    clamped_size, warnings = _clamp_box_size(size, max_box_dimension, warn_large_boxes)
+    # Clamp to max_box_dimension (allow user to specify up to 60.0 Å for custom pockets)
+    manual_max = max(max_box_dimension, 60.0)
+    clamped_size, warnings = _clamp_box_size(size, manual_max, warn_large_boxes)
     for w in warnings:
         print(f"  [!] {w}")
 
@@ -467,22 +474,27 @@ def interactive_pocket_selection(
     pockets: list[dict],
     max_box_dimension: float = 30.0,
     doc=None,
+    protein_pdb: str = None,
 ) -> tuple[dict, str]:
     """
-    Display top 3 detected pockets and prompt the user to select one
-    or define a pocket manually.
+    Display top 3 detected pockets and prompt the user to select one,
+    launch the interactive 3D graphical tuner, or define a pocket manually.
 
     Args:
         pockets: List of detected pockets (sorted by score descending).
         max_box_dimension: Maximum allowed box dimension per axis.
         doc: gemmi Structure object (needed for manual pocket residue extraction).
+        protein_pdb: Path to the cleaned protein PDB file (for 3D viewer).
 
     Returns:
         Tuple of (selected_pocket, selection_method) where selection_method
-        is one of: "best_score", "user_selected", "manual".
+        is one of: "best_score", "user_selected", "manual", "graphical_gui".
     """
     display_pockets = pockets[:3]
     display_top_pockets(pockets, n=3)
+
+    gui_option = len(display_pockets) + 1
+    manual_option = len(display_pockets) + 2
 
     print()
     print("Select Pocket:")
@@ -490,9 +502,10 @@ def interactive_pocket_selection(
     for i, p in enumerate(display_pockets):
         pid = p.get("pocket_id", i)
         print(f"  [{pid + 1}] Use Pocket {pid + 1}")
-    print(f"  [{len(display_pockets) + 1}] Define Pocket Manually")
+    print(f"  [{gui_option}] Graphical Interface (Interactive 3D Box Tuner)")
+    print(f"  [{manual_option}] Define Pocket Manually (CLI Text Input)")
     print()
-    print("Selection: ", end="", flush=True)
+    print("Selection [1]: ", end="", flush=True)
 
     try:
         raw = input().strip()
@@ -503,14 +516,29 @@ def interactive_pocket_selection(
     if not raw:
         return pockets[0], "best_score"
 
+    if raw.lower() in ("g", "gui", "graphical"):
+        from core.pocket_gui import launch_pocket_gui
+        return launch_pocket_gui(pockets, doc, protein_pdb, max_box_dimension)
+
+    if raw.lower() in ("m", "manual"):
+        manual = _collect_manual_pocket(doc, max_box_dimension)
+        if manual is None:
+            print("Manual entry cancelled. Using Pocket 1.")
+            return pockets[0], "best_score"
+        return manual, "manual"
+
     try:
         choice = int(raw)
     except ValueError:
         print("Invalid selection. Using Pocket 1.")
         return pockets[0], "best_score"
 
+    # Graphical GUI option
+    if choice == gui_option:
+        from core.pocket_gui import launch_pocket_gui
+        return launch_pocket_gui(pockets, doc, protein_pdb, max_box_dimension)
+
     # Manual pocket entry
-    manual_option = len(display_pockets) + 1
     if choice == manual_option:
         manual = _collect_manual_pocket(doc, max_box_dimension)
         if manual is None:
@@ -534,16 +562,17 @@ def prompt_pocket_confirmation_with_selection(
     pockets: list[dict],
     max_box_dimension: float = 30.0,
     doc=None,
+    protein_pdb: str = None,
 ) -> tuple[dict, str]:
     """
     For automatic/larger workflows: display top 3 pockets, then ask
-    if the user wants the best-ranked pocket. If not, show the full
-    selection menu.
+    if the user wants the best-ranked pocket, graphical tuner, or list selection.
 
     Args:
         pockets: List of detected pockets (sorted by score descending).
         max_box_dimension: Maximum allowed box dimension per axis.
         doc: gemmi Structure object.
+        protein_pdb: Path to the cleaned protein PDB file.
 
     Returns:
         Tuple of (selected_pocket, selection_method).
@@ -554,9 +583,10 @@ def prompt_pocket_confirmation_with_selection(
     print("Use best-ranked pocket?")
     print()
     print("  [Y] Yes")
-    print("  [N] No")
+    print("  [N] No (Select from list or manual entry)")
+    print("  [G] Graphical Interface (Interactive 3D Box Tuner)")
     print()
-    print("Choice [Y/n]: ", end="", flush=True)
+    print("Choice [Y/n/g]: ", end="", flush=True)
 
     try:
         answer = input().strip().lower()
@@ -564,9 +594,13 @@ def prompt_pocket_confirmation_with_selection(
         print("\nUsing best-ranked pocket.")
         return pockets[0], "best_score"
 
+    if answer in ("g", "gui", "graphical"):
+        from core.pocket_gui import launch_pocket_gui
+        return launch_pocket_gui(pockets, doc, protein_pdb, max_box_dimension)
+
     if answer in ("n", "no"):
         # Show full selection menu
-        return _pocket_selection_menu(pockets, max_box_dimension, doc)
+        return _pocket_selection_menu(pockets, max_box_dimension, doc, protein_pdb)
 
     # Accept best pocket
     return pockets[0], "best_score"
@@ -576,12 +610,15 @@ def _pocket_selection_menu(
     pockets: list[dict],
     max_box_dimension: float = 30.0,
     doc=None,
+    protein_pdb: str = None,
 ) -> tuple[dict, str]:
     """
     Show the pocket selection menu (without re-displaying pocket details).
     Used after the user declines the best-ranked pocket in a pipeline workflow.
     """
     display_pockets = pockets[:3]
+    gui_option = len(display_pockets) + 1
+    manual_option = len(display_pockets) + 2
 
     print()
     print("Select Pocket:")
@@ -589,9 +626,10 @@ def _pocket_selection_menu(
     for i, p in enumerate(display_pockets):
         pid = p.get("pocket_id", i)
         print(f"  [{pid + 1}] Pocket {pid + 1}")
-    print(f"  [{len(display_pockets) + 1}] Define Pocket Manually")
+    print(f"  [{gui_option}] Graphical Interface (Interactive 3D Box Tuner)")
+    print(f"  [{manual_option}] Define Pocket Manually (CLI Text Input)")
     print()
-    print("Selection: ", end="", flush=True)
+    print("Selection [1]: ", end="", flush=True)
 
     try:
         raw = input().strip()
@@ -602,13 +640,27 @@ def _pocket_selection_menu(
     if not raw:
         return pockets[0], "best_score"
 
+    if raw.lower() in ("g", "gui", "graphical"):
+        from core.pocket_gui import launch_pocket_gui
+        return launch_pocket_gui(pockets, doc, protein_pdb, max_box_dimension)
+
+    if raw.lower() in ("m", "manual"):
+        manual = _collect_manual_pocket(doc, max_box_dimension)
+        if manual is None:
+            print("Manual entry cancelled. Using Pocket 1.")
+            return pockets[0], "best_score"
+        return manual, "manual"
+
     try:
         choice = int(raw)
     except ValueError:
         print("Invalid selection. Using Pocket 1.")
         return pockets[0], "best_score"
 
-    manual_option = len(display_pockets) + 1
+    if choice == gui_option:
+        from core.pocket_gui import launch_pocket_gui
+        return launch_pocket_gui(pockets, doc, protein_pdb, max_box_dimension)
+
     if choice == manual_option:
         manual = _collect_manual_pocket(doc, max_box_dimension)
         if manual is None:
@@ -637,12 +689,15 @@ def display_selected_pocket_summary(pocket: dict, selection_method: str) -> None
         "best_score": "Best Score (Auto)",
         "user_selected": "User Selected",
         "manual": "Manual",
+        "graphical_gui": "Graphical Interface (3D Tuner)",
     }
     method_label = method_labels.get(selection_method, selection_method)
 
     pocket_id = pocket.get("pocket_id", "?")
     if isinstance(pocket_id, int) and pocket_id >= 0:
         pocket_id_display = pocket_id + 1
+    elif selection_method == "graphical_gui":
+        pocket_id_display = "Custom (Graphical Tuner)"
     else:
         pocket_id_display = "Manual"
 

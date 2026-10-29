@@ -1,21 +1,49 @@
-# Use miniconda3 as the base image to handle complex scientific dependencies (like RDKit and AutoDock Vina)
-FROM continuumio/miniconda3:latest
+# Multi-platform base image with Miniconda for scientific cheminformatics stacks
+FROM continuumio/miniconda3:latest AS base
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive
 
 # Set the working directory inside the container
 WORKDIR /app
 
-# Copy the conda environment file first to leverage Docker cache for dependencies
+# Install OS libraries required for RDKit, OpenBabel, Cython extensions, and 3D graphics rendering
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libgl1 \
+    libglib2.0-0 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the conda environment file first to leverage Docker layer caching
 COPY environment.yml .
 
-# Create the conda environment and clean up cache to reduce image size
-RUN conda env create -f environment.yml && \
+# Fast environment creation using libmamba solver
+RUN conda install -n base conda-libmamba-solver -y && \
+    conda config --set solver libmamba && \
+    conda env create -f environment.yml && \
     conda clean -afy
 
-# Copy the rest of the application code
+# Copy application source code
 COPY . .
 
-# Set the entrypoint to use the conda environment
-ENTRYPOINT ["conda", "run", "--no-capture-output", "-n", "druglab", "python", "druglab.py"]
+# Install DrugLab package into the conda environment
+RUN conda run -n druglab pip install --no-build-isolation --no-deps -e .
 
-# Provide a default argument so running the container without arguments shows help
+# Expose port for the interactive 3D Pocket Tuner web GUI
+EXPOSE 8080
+
+# Set entrypoint to run druglab within the activated conda environment
+ENTRYPOINT ["conda", "run", "--no-capture-output", "-n", "druglab", "druglab"]
+
+# Default argument displays help
+CMD ["--help"]
+
+# ── Optional Target: Protein–Peptide Docking with LightDock ──
+FROM base AS peptide
+RUN conda run -n druglab pip install wheel setuptools cython freesasa prody && \
+    conda run -n druglab python utils/install_lightdock.py && \
+    conda run -n druglab pip install --no-build-isolation --no-deps -e .
+ENTRYPOINT ["conda", "run", "--no-capture-output", "-n", "druglab", "druglab"]
 CMD ["--help"]

@@ -15,9 +15,11 @@ Usage:
 
 import logging
 import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from contextlib import contextmanager
 
 from rich.console import Console
 from rich.logging import RichHandler
@@ -34,6 +36,139 @@ console = Console()
 # Track active step timers: {step_name: start_time}
 _step_timers: dict[str, float] = {}
 
+# Active log file mapping: {module_name: absolute Path}
+_active_log_files: dict[str, Path] = {}
+_default_log_dir: str = "output/logs"
+_is_verbose: bool = False
+
+
+def set_verbose(verbose: bool) -> None:
+    """
+    Toggle verbose console logging.
+    When False (default), console only shows warnings/errors and structured summary panels.
+    Full verbose logs are always captured in log files.
+    """
+    global _is_verbose
+    _is_verbose = verbose
+    for name, logger in list(logging.Logger.manager.loggerDict.items()):
+        if name.startswith("druglab.") and isinstance(logger, logging.Logger):
+            for h in logger.handlers:
+                if isinstance(h, RichHandler):
+                    h.setLevel(logging.DEBUG if verbose else logging.WARNING)
+
+
+def is_verbose() -> bool:
+    """Check if verbose logging is enabled."""
+    return _is_verbose
+
+
+@contextmanager
+def suppress_stdout_stderr(force: bool = False):
+    """
+    Suppress low-level C and Python stdout/stderr (e.g. from PyTorch, Lightning, tqdm, Chemprop, Vina).
+    If verbose mode is active and not forced, does nothing.
+    """
+    if _is_verbose and not force:
+        yield
+        return
+
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        old_stdout = os.dup(1)
+        old_stderr = os.dup(2)
+
+        os.dup2(devnull, 1)
+        os.dup2(devnull, 2)
+        os.close(devnull)
+        try:
+            yield
+        finally:
+            try:
+                sys.stdout.flush()
+                sys.stderr.flush()
+            except Exception:
+                pass
+            os.dup2(old_stdout, 1)
+            os.dup2(old_stderr, 2)
+            os.close(old_stdout)
+            os.close(old_stderr)
+    except Exception:
+        yield
+
+
+def set_workflow_log_dir(log_dir: str) -> None:
+    """
+    Redirect all active module loggers to write their log files into the specified directory.
+    """
+    global _default_log_dir
+    _default_log_dir = log_dir
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+
+    for name, logger in list(logging.Logger.manager.loggerDict.items()):
+        if name.startswith("druglab.") and isinstance(logger, logging.Logger):
+            module_name = name.split(".", 1)[1]
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_file = Path(log_dir) / f"{module_name}_{timestamp}.log"
+
+            # Remove old FileHandlers to avoid duplicate file writing
+            logger.handlers = [h for h in logger.handlers if not isinstance(h, logging.FileHandler)]
+
+            fh = logging.FileHandler(log_file, encoding="utf-8")
+            fh.setLevel(logging.DEBUG)
+            fh.setFormatter(
+                logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+            )
+            logger.addHandler(fh)
+            _active_log_files[module_name] = log_file.resolve()
+
+
+def get_log_file(name: str) -> Path | None:
+    """Return the active log file path for a module."""
+    return _active_log_files.get(name)
+
+
+def get_all_log_files() -> dict[str, Path]:
+    """Return all active module log files."""
+    return dict(_active_log_files)
+
+
+def print_log_contents(name_or_query: str, max_lines: int = 100) -> None:
+    """Print the contents of a module log file with syntax highlighting in terminal."""
+    target_path = None
+    query = name_or_query.strip().lower()
+
+    # Match by key or partial match
+    for mod_name, path in _active_log_files.items():
+        if query in mod_name.lower() or query in path.name.lower():
+            target_path = path
+            break
+
+    if not target_path or not target_path.exists():
+        console.print(f"[yellow]No log file found matching '{name_or_query}'.[/yellow]")
+        return
+
+    try:
+        with open(target_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        text = "".join(lines[-max_lines:]) if len(lines) > max_lines else "".join(lines)
+        from rich.syntax import Syntax
+        syntax = Syntax(text, "log", theme="monokai", line_numbers=True)
+        panel = Panel(
+            syntax,
+            title=f"[bold]Log: {target_path.name} (showing last {min(len(lines), max_lines)} lines)[/bold]",
+            subtitle=f"{target_path}",
+            border_style="cyan",
+        )
+        console.print(panel)
+    except Exception as exc:
+        console.print(f"[red]Error reading log {target_path}: {exc}[/red]")
+
 
 # ──────────────────────────────────────────────────────────────
 # Logger Setup
@@ -41,7 +176,7 @@ _step_timers: dict[str, float] = {}
 
 def setup_logger(
     name: str,
-    log_dir: str = "output/logs",
+    log_dir: str | None = None,
     level: str = "INFO",
     verbose: bool = False,
 ) -> logging.Logger:
@@ -52,7 +187,7 @@ def setup_logger(
         name: Logger name (typically the module name, e.g. "protein_preparation").
         log_dir: Directory for log files. Created if it doesn't exist.
         level: Logging level string ("DEBUG", "INFO", "WARNING", "ERROR").
-        verbose: If True, overrides level to DEBUG.
+        verbose: If True, overrides console level to DEBUG.
 
     Returns:
         Configured logging.Logger instance.
@@ -69,7 +204,8 @@ def setup_logger(
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
     logger.propagate = False
 
-    # ── Rich Console Handler ──
+    # ── Rich Console Handler (Quiet by default, verbose on flag) ──
+    rich_level = logging.DEBUG if (verbose or _is_verbose) else logging.WARNING
     rich_handler = RichHandler(
         console=console,
         show_path=False,
@@ -78,13 +214,14 @@ def setup_logger(
         tracebacks_show_locals=verbose,
         markup=True,
     )
-    rich_handler.setLevel(getattr(logging, level.upper(), logging.INFO))
+    rich_handler.setLevel(rich_level)
     rich_format = logging.Formatter("%(message)s")
     rich_handler.setFormatter(rich_format)
     logger.addHandler(rich_handler)
 
-    # ── File Handler ──
-    log_path = Path(log_dir)
+    # ── File Handler (Captures everything) ──
+    target_dir = log_dir or _default_log_dir
+    log_path = Path(target_dir)
     log_path.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -98,6 +235,9 @@ def setup_logger(
     )
     file_handler.setFormatter(file_format)
     logger.addHandler(file_handler)
+
+    # Track active file
+    _active_log_files[name] = log_file.resolve()
 
     logger.debug(f"Logger initialized: {name} (level={level}, log_file={log_file})")
     return logger
@@ -133,6 +273,7 @@ def log_step(
         if details:
             for key, value in details.items():
                 logger.info(f"  {key}: {value}")
+        console.print(f"[bold cyan]▶ {step_name}[/bold cyan] [dim]in progress...[/dim]")
         return
 
     # Calculate duration on completion/failure
@@ -155,7 +296,7 @@ def log_step(
 
     # Rich console panel
     if status_lower in ("completed", "failed", "skipped"):
-        _render_step_panel(step_name, status, details, duration_str)
+        _render_step_panel(step_name, status, details, duration_str, logger_name=logger.name)
 
 
 def _render_step_panel(
@@ -163,8 +304,9 @@ def _render_step_panel(
     status: str,
     details: dict | None,
     duration_str: str,
+    logger_name: str | None = None,
 ) -> None:
-    """Render a Rich panel for a completed/failed step."""
+    """Render a Rich panel for a completed/failed step with interactive clickable log link."""
     status_lower = status.lower()
 
     if status_lower == "completed":
@@ -185,6 +327,21 @@ def _render_step_panel(
     if details:
         for key, value in details.items():
             lines.append(f"  {key}: {value}")
+
+    # Add Clickable Log File Link (OSC 8 hyperlink)
+    module_key = logger_name.split(".", 1)[-1] if logger_name else ""
+    log_file_path = _active_log_files.get(module_key)
+    if not log_file_path:
+        step_slug = step_name.lower().replace(" ", "_")
+        log_file_path = _active_log_files.get(step_slug)
+
+    if log_file_path and log_file_path.exists():
+        try:
+            rel_path = os.path.relpath(log_file_path, os.getcwd())
+        except ValueError:
+            rel_path = str(log_file_path)
+        uri = log_file_path.as_uri()
+        lines.append(f"  📄 [bold cyan]Full Log[/bold cyan]: [link={uri}]{rel_path}[/link] [dim](Ctrl+click to open)[/dim]")
 
     footer = f"{status_icon} {status}"
     if duration_str:

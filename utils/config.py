@@ -36,7 +36,7 @@ class ProteinConfig:
     remove_water: bool = True
     remove_heterogens: bool = True
     add_hydrogens: bool = True
-    fix_missing_residues: bool = True
+    fix_missing_residues: bool = False
     fix_missing_atoms: bool = True
     ph: float = 7.4
     chain_id: str | None = None

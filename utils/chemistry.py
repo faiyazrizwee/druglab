@@ -415,3 +415,122 @@ def deduplicate_mols(mols: list[Chem.Mol]) -> list[Chem.Mol]:
         logger.info(f"Deduplicated: removed {removed} duplicates, {len(unique_mols)} unique remain")
 
     return unique_mols
+
+
+# ──────────────────────────────────────────────────────────────
+# Robust 3D Conformer Generation & Medicinal Chemistry Metrics
+# ──────────────────────────────────────────────────────────────
+
+def embed_conformer_robust(
+    mol: Chem.Mol,
+    num_confs: int = 1,
+    random_seed: int = 42,
+    energy_minimize: bool = True,
+) -> tuple[Chem.Mol, bool]:
+    """
+    Generate 3D coordinates for a molecule using multi-tier fallback strategies:
+      Tier 1: ETKDGv3 with default parameters.
+      Tier 2: ETKDGv3 with random coordinates (useRandomCoords=True) & maxIterations=500.
+      Tier 3: Standard Distance Geometry with random coordinates.
+      Tier 4: Compute2DCoords fallback if 3D fails completely.
+
+    Args:
+        mol: RDKit Mol object (Hs should be added).
+        num_confs: Number of conformers to generate.
+        random_seed: Random seed for reproducibility.
+        energy_minimize: If True, optimize with MMFF (fallback to UFF).
+
+    Returns:
+        tuple of (mol_with_coords, success_flag_bool)
+    """
+    if mol is None:
+        return None, False
+
+    # Tier 1: ETKDGv3
+    try:
+        params = AllChem.ETKDGv3()
+        params.randomSeed = random_seed
+        params.maxIterations = 500
+        cids = AllChem.EmbedMultipleConfs(mol, numConfs=num_confs, params=params)
+        if len(cids) > 0 and -1 not in cids:
+            if energy_minimize:
+                _minimize_confs(mol)
+            return mol, True
+    except Exception:
+        pass
+
+    # Tier 2: ETKDGv3 with random coordinates
+    try:
+        params = AllChem.ETKDGv3()
+        params.randomSeed = random_seed
+        params.useRandomCoords = True
+        params.maxIterations = 1000
+        cids = AllChem.EmbedMultipleConfs(mol, numConfs=num_confs, params=params)
+        if len(cids) > 0 and -1 not in cids:
+            if energy_minimize:
+                _minimize_confs(mol)
+            return mol, True
+    except Exception:
+        pass
+
+    # Tier 3: Simple distance geometry embed
+    try:
+        cid = AllChem.EmbedMolecule(mol, randomSeed=random_seed, useRandomCoords=True, maxAttempts=1000)
+        if cid >= 0:
+            if energy_minimize:
+                _minimize_confs(mol)
+            return mol, True
+    except Exception:
+        pass
+
+    # Tier 4: Fallback to 2D
+    try:
+        AllChem.Compute2DCoords(mol)
+        return mol, False
+    except Exception:
+        return mol, False
+
+
+def _minimize_confs(mol: Chem.Mol):
+    """Attempt MMFF minimization, fallback to UFF."""
+    try:
+        AllChem.MMFFOptimizeMoleculeConfs(mol, numThreads=0)
+    except Exception:
+        try:
+            AllChem.UFFOptimizeMoleculeConfs(mol, numThreads=0)
+        except Exception:
+            pass
+
+
+def calculate_ligand_efficiency(binding_affinity_kcal_mol: float, heavy_atom_count: int) -> float:
+    """
+    Calculate Ligand Efficiency (LE): -DeltaG / N_heavy [kcal/mol/heavy atom].
+
+    Higher is better. Standard drug lead threshold: LE >= 0.30.
+    """
+    if heavy_atom_count <= 0:
+        return 0.0
+    # binding_affinity is negative (e.g. -7.5) -> LE is positive (- (-7.5) / N = 7.5 / N)
+    return round(-float(binding_affinity_kcal_mol) / float(heavy_atom_count), 3)
+
+
+def calculate_lipophilic_efficiency(binding_affinity_kcal_mol: float, logp: float) -> float:
+    """
+    Calculate Lipophilic Ligand Efficiency (LLE / LipE): pKd - cLogP.
+    Using approximation: pKd ~ -DeltaG / 1.37 (at 298 K).
+
+    Higher is better. Standard drug lead threshold: LLE >= 5.0.
+    """
+    pkd = -float(binding_affinity_kcal_mol) / 1.37
+    return round(pkd - float(logp), 3)
+
+
+def calculate_binding_efficiency_index(binding_affinity_kcal_mol: float, mw: float) -> float:
+    """
+    Calculate Binding Efficiency Index (BEI): pKd / (MW / 1000).
+    """
+    if mw <= 0:
+        return 0.0
+    pkd = -float(binding_affinity_kcal_mol) / 1.37
+    return round(pkd / (float(mw) / 1000.0), 3)
+
