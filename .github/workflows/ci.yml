@@ -34,10 +34,10 @@ jobs:
             openbabel openmm pdbfixer vina pytest pytest-cov matplotlib pyyaml
           pip install jinja2 plotly rich tqdm meeko
 
-      - name: Install DrugLab in editable mode
+      - name: Install DrugLab and Peptide Dependencies
         shell: bash -el {0}
         run: |
-          pip install -e . --no-deps
+          pip install -e ".[peptide]"
 
       - name: Verify CLI Entry Points
         shell: bash -el {0}
