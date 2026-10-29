@@ -29,7 +29,7 @@ RUN conda install -n base conda-libmamba-solver -y && \
 COPY . .
 
 # Install DrugLab package into the conda environment
-RUN conda run -n druglab pip install --no-deps -e .
+RUN conda run -n druglab pip install --no-build-isolation --no-deps -e .
 
 # Expose port for the interactive 3D Pocket Tuner web GUI
 EXPOSE 8080
@@ -43,7 +43,8 @@ CMD ["--help"]
 # ── Optional Target: Protein–Peptide Docking with LightDock ──
 FROM base AS peptide
 ENV CFLAGS="-Wno-incompatible-pointer-types"
-RUN conda run -n druglab pip install cython && \
-    CFLAGS="-Wno-incompatible-pointer-types" conda run -n druglab pip install --no-build-isolation -e ".[peptide]"
+RUN conda run -n druglab pip install wheel setuptools cython freesasa prody && \
+    conda run -n druglab /bin/bash -c 'CFLAGS="-Wno-incompatible-pointer-types" pip install --no-build-isolation lightdock' && \
+    conda run -n druglab pip install --no-build-isolation --no-deps -e .
 ENTRYPOINT ["conda", "run", "--no-capture-output", "-n", "druglab", "druglab"]
 CMD ["--help"]
