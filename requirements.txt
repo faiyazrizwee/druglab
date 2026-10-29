@@ -11,6 +11,7 @@ pandas
 pdbfixer
 plotly
 pymoo
+pyyaml
 rdkit
 rich
 scikit-learn

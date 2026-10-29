@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    name: Test on Python ${{ matrix.python-version }}
+    name: Unit & Integration Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -26,20 +26,53 @@ jobs:
           channels: conda-forge
           auto-update-conda: false
 
-      - name: Install dependencies via Conda
+      - name: Install dependencies via Conda & Pip
         shell: bash -el {0}
         run: |
           conda install -y -c conda-forge \
             rdkit biopython gemmi numpy pandas scipy scikit-learn \
-            openbabel openmm pdbfixer vina pytest pytest-cov
-          pip install jinja2 plotly rich tqdm meeko pyyaml
+            openbabel openmm pdbfixer vina pytest pytest-cov matplotlib pyyaml
+          pip install jinja2 plotly rich tqdm meeko
 
       - name: Install DrugLab in editable mode
         shell: bash -el {0}
         run: |
           pip install -e . --no-deps
 
-      - name: Run Test Suite
+      - name: Verify CLI Entry Points
+        shell: bash -el {0}
+        run: |
+          druglab --help
+          druglab protein --help
+          druglab pocket --help
+          druglab ligand --help
+          druglab screen --help
+          druglab dock --help
+          druglab select --help
+          druglab optimize --help
+          druglab report --help
+          druglab fetch --help
+
+      - name: Run Test Suite with Coverage
         shell: bash -el {0}
         run: |
           pytest tests/ -v --cov=core --cov=drug_selection --cov=lead_optimization --cov=utils --cov=reports
+
+  docker-build:
+    name: Verify Docker Container Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: druglab:ci-check
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

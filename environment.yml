@@ -13,6 +13,7 @@ dependencies:
   - openmm
   - pandas
   - pdbfixer
+  - pyyaml
   - rdkit
   - scikit-learn
   - scipy
