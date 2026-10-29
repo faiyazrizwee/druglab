@@ -43,6 +43,7 @@ jobs:
         shell: bash -el {0}
         run: |
           druglab --help
+          druglab run --help
           druglab protein --help
           druglab pocket --help
           druglab ligand --help
@@ -52,11 +53,21 @@ jobs:
           druglab optimize --help
           druglab report --help
           druglab fetch --help
+          druglab peptide --help
+          druglab peptide run --help
+          druglab peptide prepare --help
+          druglab peptide report --help
 
-      - name: Run Test Suite with Coverage
+      - name: Run Unit Tests with Coverage
         shell: bash -el {0}
         run: |
-          pytest tests/ -v --cov=core --cov=drug_selection --cov=lead_optimization --cov=utils --cov=reports
+          pytest tests/ -v -m "not integration" --cov=core --cov=drug_selection --cov=lead_optimization --cov=utils --cov=reports
+
+      - name: Install Peptide Dependencies & Run Integration Smoke Test
+        shell: bash -el {0}
+        run: |
+          pip install -e ".[peptide]"
+          pytest tests/test_peptide_integration.py -v
 
   docker-build:
     name: Verify Docker Container Build

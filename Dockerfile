@@ -1,5 +1,5 @@
 # Multi-platform base image with Miniconda for scientific cheminformatics stacks
-FROM continuumio/miniconda3:latest
+FROM continuumio/miniconda3:latest AS base
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -8,7 +8,7 @@ ENV PYTHONUNBUFFERED=1 \
 # Set the working directory inside the container
 WORKDIR /app
 
-# Install OS libraries required for RDKit, OpenBabel, and 3D graphics rendering
+# Install OS libraries required for RDKit, OpenBabel, Cython extensions, and 3D graphics rendering
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libgl1 \
@@ -38,4 +38,10 @@ EXPOSE 8080
 ENTRYPOINT ["conda", "run", "--no-capture-output", "-n", "druglab", "druglab"]
 
 # Default argument displays help
+CMD ["--help"]
+
+# ── Optional Target: Protein–Peptide Docking with LightDock ──
+FROM base AS peptide
+RUN conda run -n druglab pip install -e ".[peptide]"
+ENTRYPOINT ["conda", "run", "--no-capture-output", "-n", "druglab", "druglab"]
 CMD ["--help"]

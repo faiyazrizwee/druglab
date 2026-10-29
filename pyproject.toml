@@ -60,6 +60,12 @@ simulation = [
     "openmm",
     "pdbfixer",
 ]
+peptide = [
+    "lightdock>=0.9.4",
+    "prody>=2.0.1",
+    "freesasa>=2.0.3",
+    "cython>=0.29.13",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov",
@@ -71,6 +77,9 @@ all = [
     "pytest>=7.0",
     "pytest-cov",
     "pymoo",
+    "lightdock>=0.9.4",
+    "prody>=2.0.1",
+    "freesasa>=2.0.3",
 ]
 
 [project.scripts]
@@ -89,6 +98,9 @@ addopts = "-v --tb=short"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+markers = [
+    "integration: marks tests as real integration tests requiring external dependencies (deselect with '-m \"not integration\"')",
+]
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::UserWarning",

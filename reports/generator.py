@@ -1090,86 +1090,94 @@ def _build_html_template(
     if has_3d:
         viewer_section = f"""
         <div class="card" style="margin-top: 30px; border-radius: 0;">
-          <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 12px;">
             <div>
-              <h3 style="margin-bottom: 4px;">Interactive 3D Molecular Complex & Docked Poses</h3>
-              <p style="color:#718096; font-size:14px; margin: 0;">
-                Rotate (Left Click + Drag), Pan (Right Click + Drag), Zoom (Scroll). Inspect all docked ligands and poses in the binding cavity.
+              <h3 style="margin-bottom: 4px;">Interactive 3D Protein–Ligand Complex</h3>
+              <p style="color:#718096; font-size:13px; margin: 0;">
+                Rotate (Left Click + Drag), Pan (Right Click + Drag), Zoom (Scroll). Inspect docked ligand poses in the binding cavity (3Dmol.js)
               </p>
             </div>
-            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-              <button id="btn_bg_mode" class="btn btn-sm" onclick="toggleBackground()" title="Toggle Light / Dark Background">Light Background</button>
-              <button class="btn btn-sm" onclick="focusLigand()" title="Focus camera on the docked ligand pose">Focus Ligand</button>
-              <button class="btn btn-sm" onclick="zoomFullProtein()" title="View whole target protein complex">Full Complex</button>
-              <button class="btn btn-sm" onclick="reset3DView()" title="Reset 3D camera orientation">Reset View</button>
+            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+              <label for="ligand_select" style="font-size: 13px; font-weight: 600; color: #4a5568;">Ligand:</label>
+              <select id="ligand_select" onchange="onLigandChange()" style="padding: 5px 10px; border-radius: 0; border: 1px solid var(--border); font-size: 13px; font-weight: 600; background: #ffffff; color: #1a202c; cursor: pointer;">
+              </select>
+              <label for="pose_select" style="font-size: 13px; font-weight: 600; color: #4a5568;">Pose:</label>
+              <select id="pose_select" onchange="onPoseChange()" style="padding: 5px 10px; border-radius: 0; border: 1px solid var(--border); font-size: 13px; font-weight: 600; background: #ffffff; color: #1a202c; cursor: pointer;">
+              </select>
+              <button class="btn btn-primary" onclick="focusLigand()" title="Focus camera directly on the docked ligand pose">🎯 Focus Ligand</button>
+              <button class="btn" onclick="reset3DView()" title="Reset 3D camera orientation">🔄 Reset View</button>
+              <button id="btn_bg_mode" class="btn" onclick="toggleBackground()" title="Toggle Light / Dark Background">Light BG</button>
             </div>
           </div>
 
-          <!-- Selection & Metrics Ribbon -->
-          <div style="background: #f8fafc; border: 1px solid var(--border); border-radius: 0; padding: 12px 16px; margin-bottom: 14px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between;">
-            <!-- Dropdowns & Toggles -->
-            <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: center;">
-              <div style="display: flex; align-items: center; gap: 8px;">
-                <label for="ligand_select" style="font-size: 13px; font-weight: 600; color: #4a5568;">Ligand:</label>
-                <select id="ligand_select" onchange="onLigandChange()" style="padding: 5px 10px; border-radius: 0; border: 1px solid var(--border); font-size: 13px; font-weight: 600; background: #ffffff; color: #1a202c; cursor: pointer;">
-                </select>
-              </div>
+          <!-- Active Pose Metrics Badges -->
+          <div id="pose_metrics_container" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px;">
+            <span id="badge_affinity" class="badge" style="background: #ebf8ff; color: #2b6cb0; font-size: 13px; font-weight: 700; padding: 6px 12px; border: 1px solid #bee3f8; border-radius: 0;">
+              ΔG: -- kcal/mol
+            </span>
+            <span id="badge_pose_num" class="badge" style="background: #edf2f7; color: #4a5568; font-size: 12px; padding: 6px 10px; border-radius: 0;">
+              Pose 1 / 1
+            </span>
+            <span id="badge_rmsd" class="badge" style="background: #edf2f7; color: #4a5568; font-size: 12px; padding: 6px 10px; border-radius: 0;">
+              RMSD: 0.00 Å
+            </span>
+            <span id="badge_le" class="badge" style="background: #def7ec; color: #2f855a; font-size: 12px; padding: 6px 10px; display: none; border-radius: 0;">
+              LE: --
+            </span>
+          </div>
 
-              <div style="display: flex; align-items: center; gap: 8px;">
-                <label for="pose_select" style="font-size: 13px; font-weight: 600; color: #4a5568;">Pose:</label>
-                <select id="pose_select" onchange="onPoseChange()" style="padding: 5px 10px; border-radius: 0; border: 1px solid var(--border); font-size: 13px; font-weight: 600; background: #ffffff; color: #1a202c; cursor: pointer;">
-                </select>
-              </div>
-
-              <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: #4a5568; cursor: pointer; user-select: none;">
-                <input type="checkbox" id="chk_pocket_residues" onchange="togglePocketResidues()" checked style="cursor: pointer; width: 14px; height: 14px;">
-                Pocket Residues (within 5 Å)
-              </label>
+          <!-- Viewer Toolbar Controls -->
+          <div style="display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 14px; padding: 12px 16px; background: #f7fafc; border: 1px solid var(--border); font-size: 13px; align-items: center;">
+            <div>
+              <strong>Protein View:</strong>
+              <select id="proteinStyle" class="btn" style="padding: 4px 8px;" onchange="applyStyles()">
+                <option value="cartoon">Cartoon</option>
+                <option value="surface">Surface</option>
+                <option value="cartoon_surface">Cartoon + Surface</option>
+                <option value="ribbon">Ribbon</option>
+                <option value="stick">Sticks</option>
+                <option value="line">Wireframe</option>
+              </select>
+              <select id="proteinColor" class="btn" style="padding: 4px 8px;" onchange="applyStyles()">
+                <option value="spectrum">Spectrum</option>
+                <option value="cyan">Cyan</option>
+                <option value="ss">Sec. Structure</option>
+                <option value="b">B-Factor</option>
+              </select>
             </div>
-
-            <!-- Active Pose Metrics Badges -->
-            <div id="pose_metrics_container" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
-              <span id="badge_affinity" class="badge" style="background: #ebf8ff; color: #2b6cb0; font-size: 13px; font-weight: 700; padding: 6px 12px; border: 1px solid #bee3f8; border-radius: 0;">
-                ΔG: -- kcal/mol
-              </span>
-              <span id="badge_pose_num" class="badge" style="background: #edf2f7; color: #4a5568; font-size: 12px; padding: 6px 10px; border-radius: 0;">
-                Pose 1 / 1
-              </span>
-              <span id="badge_rmsd" class="badge" style="background: #edf2f7; color: #4a5568; font-size: 12px; padding: 6px 10px; border-radius: 0;">
-                RMSD: 0.00 Å
-              </span>
-              <span id="badge_le" class="badge" style="background: #def7ec; color: #2f855a; font-size: 12px; padding: 6px 10px; display: none; border-radius: 0;">
-                LE: --
-              </span>
+            <div>
+              <strong>Ligand View:</strong>
+              <select id="ligandStyle" class="btn" style="padding: 4px 8px;" onchange="applyStyles()">
+                <option value="stick">Sticks</option>
+                <option value="ballAndStick">Ball &amp; Stick</option>
+                <option value="sphere">Spacefill</option>
+                <option value="surface">Surface</option>
+              </select>
+              <select id="ligandColor" class="btn" style="padding: 4px 8px;" onchange="applyStyles()">
+                <option value="greenCarbon">Green Carbon</option>
+                <option value="orangeCarbon">Orange Carbon</option>
+                <option value="element">Element / CPK</option>
+                <option value="spectrum">Spectrum</option>
+              </select>
+            </div>
+            <div style="display: flex; gap: 12px; align-items: center; margin-left: auto; flex-wrap: wrap;">
+              <label style="cursor: pointer; display: flex; align-items: center; gap: 4px;"><input type="checkbox" id="chkProtein" checked onchange="applyStyles()"> Show Protein</label>
+              <label style="cursor: pointer; display: flex; align-items: center; gap: 4px;"><input type="checkbox" id="chkLigand" checked onchange="applyStyles()"> Show Ligand</label>
+              <label style="cursor: pointer; display: flex; align-items: center; gap: 4px;"><input type="checkbox" id="chk_pocket_residues" checked onchange="togglePocketResidues()"> Pocket (&lt;5Å)</label>
+              <label style="cursor: pointer; display: flex; align-items: center; gap: 4px;"><input type="checkbox" id="chkHbonds" onchange="applyStyles()"> H-Bonds</label>
             </div>
           </div>
 
-          <!-- Style Selectors Ribbon -->
-          <div style="display: flex; flex-wrap: wrap; gap: 18px; align-items: center; margin-bottom: 12px; padding: 0 2px;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <span style="font-size: 13px; font-weight: 600; color: #718096;">Protein:</span>
-              <div class="style-btn-group" id="protein_style_group" style="border-radius: 0;">
-                <button type="button" class="btn btn-sm btn-active" onclick="setProteinStyle('cartoon', this)">Cartoon</button>
-                <button type="button" class="btn btn-sm" onclick="setProteinStyle('surface', this)">Surface</button>
-                <button type="button" class="btn btn-sm" onclick="setProteinStyle('cartoon_surface', this)">Cartoon + Surface</button>
-                <button type="button" class="btn btn-sm" onclick="setProteinStyle('sticks', this)">Sticks</button>
-                <button type="button" class="btn btn-sm" onclick="setProteinStyle('wireframe', this)">Wireframe</button>
-                <button type="button" class="btn btn-sm" onclick="setProteinStyle('off', this)">Hide</button>
-              </div>
-            </div>
-
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <span style="font-size: 13px; font-weight: 600; color: #718096;">Ligand:</span>
-              <div class="style-btn-group" id="ligand_style_group" style="border-radius: 0;">
-                <button type="button" class="btn btn-sm btn-active" onclick="setLigandStyle('sticks', this)">Sticks</button>
-                <button type="button" class="btn btn-sm" onclick="setLigandStyle('ball_stick', this)">Ball &amp; Stick</button>
-                <button type="button" class="btn btn-sm" onclick="setLigandStyle('spheres', this)">Spheres</button>
+          <!-- 3Dmol Canvas Container with Interactive HUD -->
+          <div style="position: relative; width: 100%; height: 520px; overflow: hidden; background: #1a202c; border: 1px solid var(--border);">
+            <div id="pose3d_viewer" style="width: 100%; height: 100%;"></div>
+            <div id="sm_interaction_hud" style="display: none; position: absolute; bottom: 12px; left: 16px; right: 16px; background: rgba(15, 23, 42, 0.92); backdrop-filter: blur(6px); border: 1px solid #334155; padding: 10px 16px; border-radius: 4px; color: #f8fafc; font-size: 13px; pointer-events: none; z-index: 50; transition: all 0.15s ease; box-shadow: 0 4px 12px rgba(0,0,0,0.35);">
+              <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                <div id="sm_hud_main" style="display: flex; align-items: center; gap: 10px;"></div>
+                <div id="sm_hud_badge"></div>
               </div>
             </div>
           </div>
-
-          <!-- 3Dmol Canvas Container -->
-          <div id="pose3d_viewer" style="height: 520px; width: 100%; position: relative; border-radius: 0; overflow: hidden; background: #1a202c; border: 1px solid var(--border);"></div>
         </div>
 
         <script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.4.2/3Dmol-min.js"></script>
@@ -1177,11 +1185,403 @@ def _build_html_template(
           let glviewer = null;
           let protModel = null;
           let ligModel = null;
-
           let isDarkMode = true;
-          let currentProtStyle = "cartoon";
-          let currentLigStyle = "sticks";
-          let showPocketResidues = true;
+          let activePocketResis = new Set();
+
+          const AA_NAMES = {{
+            ALA: "Alanine", ARG: "Arginine", ASN: "Asparagine", ASP: "Aspartate",
+            CYS: "Cysteine", GLN: "Glutamine", GLU: "Glutamate", GLY: "Glycine",
+            HIS: "Histidine", ILE: "Isoleucine", LEU: "Leucine", LYS: "Lysine",
+            MET: "Methionine", PHE: "Phenylalanine", PRO: "Proline", SER: "Serine",
+            THR: "Threonine", TRP: "Tryptophan", TYR: "Tyrosine", VAL: "Valine",
+            SEC: "Selenocysteine", PYL: "Pyrrolysine", MSE: "Selenomethionine"
+          }};
+
+          let hoverLabels = [];
+          let hoverShapes = [];
+          let lastHoveredAtom = null;
+
+          function clearHoverHighlights() {{
+            if (!glviewer) return;
+            for (let i = 0; i < hoverLabels.length; i++) {{
+              try {{ glviewer.removeLabel(hoverLabels[i]); }} catch (e) {{}}
+            }}
+            hoverLabels = [];
+            for (let i = 0; i < hoverShapes.length; i++) {{
+              try {{ glviewer.removeShape(hoverShapes[i]); }} catch (e) {{}}
+            }}
+            hoverShapes = [];
+          }}
+
+          function classifyInteraction(resAtoms, partnerAtoms) {{
+            if (!resAtoms || resAtoms.length === 0 || !partnerAtoms || partnerAtoms.length === 0) {{
+              return {{
+                type: "none",
+                label: "No direct contact",
+                color: "#718096",
+                dist: 999.0,
+                resAtom: resAtoms ? resAtoms[0] : null,
+                partnerAtom: null,
+                detail: "No partner atoms nearby"
+              }};
+            }}
+
+            const donAccElements = new Set(['N', 'O', 'S', 'F']);
+            const basicRes = new Set(['ARG', 'LYS', 'HIS']);
+            const acidicRes = new Set(['ASP', 'GLU']);
+            const aromaticRes = new Set(['PHE', 'TYR', 'TRP', 'HIS']);
+            const hydrophobicRes = new Set(['ALA', 'VAL', 'LEU', 'ILE', 'MET', 'PRO', 'PHE', 'TRP', 'TYR', 'CYS']);
+
+            let minDist = 999.0;
+            let bestResAtom = resAtoms[0];
+            let bestPartnerAtom = partnerAtoms[0];
+            let interactionsFound = [];
+
+            for (let i = 0; i < resAtoms.length; i++) {{
+              let ra = resAtoms[i];
+              let raElem = (ra.elem || (ra.atom ? ra.atom.replace(/[^a-zA-Z]/g, '').slice(0, 1) : '')).toUpperCase();
+              if (raElem === 'H') continue;
+
+              for (let j = 0; j < partnerAtoms.length; j++) {{
+                let pa = partnerAtoms[j];
+                let paElem = (pa.elem || (pa.atom ? pa.atom.replace(/[^a-zA-Z]/g, '').slice(0, 1) : '')).toUpperCase();
+                if (paElem === 'H') continue;
+
+                let dx = ra.x - pa.x;
+                let dy = ra.y - pa.y;
+                let dz = ra.z - pa.z;
+                let d = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+                if (d < minDist) {{
+                  minDist = d;
+                  bestResAtom = ra;
+                  bestPartnerAtom = pa;
+                }}
+
+                // 1. Steric Clash (< 2.0 A)
+                if (d < 2.0) {{
+                  interactionsFound.push({{
+                    type: "clash",
+                    priority: 10,
+                    label: "⚠️ Steric Clash",
+                    color: "#e53e3e",
+                    dist: d,
+                    resAtom: ra,
+                    partnerAtom: pa,
+                    detail: `Heavy atom steric overlap (${{d.toFixed(2)}} Å)`
+                  }});
+                }}
+
+                // 2. Salt Bridge (< 4.2 A)
+                let resIsBasic = basicRes.has(ra.resn) && (ra.atom && (ra.atom.includes('N') || raElem === 'N'));
+                let resIsAcidic = acidicRes.has(ra.resn) && (ra.atom && (ra.atom.includes('O') || raElem === 'O'));
+                let partnerIsAcidic = (acidicRes.has(pa.resn) && (pa.atom && pa.atom.includes('O'))) || (paElem === 'O' && pa.resn !== 'HOH');
+                let partnerIsBasic = (basicRes.has(pa.resn) && (pa.atom && pa.atom.includes('N'))) || (paElem === 'N');
+
+                if ((resIsBasic && partnerIsAcidic) || (resIsAcidic && partnerIsBasic)) {{
+                  if (d <= 4.2) {{
+                    interactionsFound.push({{
+                      type: "salt_bridge",
+                      priority: 9,
+                      label: "⚡ Salt Bridge / Ionic",
+                      color: "#9f7aea",
+                      dist: d,
+                      resAtom: ra,
+                      partnerAtom: pa,
+                      detail: `Ionic attraction between oppositely charged groups (${{d.toFixed(2)}} Å)`
+                    }});
+                  }}
+                }}
+
+                // 3. Hydrogen Bond (2.4 - 3.5 A)
+                if (donAccElements.has(raElem) && donAccElements.has(paElem)) {{
+                  if (d >= 2.4 && d <= 3.5) {{
+                    interactionsFound.push({{
+                      type: "hbond",
+                      priority: 8,
+                      label: "⚡ Hydrogen Bond",
+                      color: "#48bb78",
+                      dist: d,
+                      resAtom: ra,
+                      partnerAtom: pa,
+                      detail: `Heteroatom donor–acceptor pair: ${{ra.atom || raElem}} ··· ${{pa.atom || paElem}} (${{d.toFixed(2)}} Å)`
+                    }});
+                  }}
+                }}
+
+                // 4. Cation-pi (< 4.5 A)
+                let resIsArom = aromaticRes.has(ra.resn);
+                let partnerIsArom = aromaticRes.has(pa.resn) || (paElem === 'C' && partnerAtoms.length < 60);
+                if ((resIsArom && partnerIsBasic) || (resIsBasic && partnerIsArom)) {{
+                  if (d <= 4.5) {{
+                    interactionsFound.push({{
+                      type: "cation_pi",
+                      priority: 7,
+                      label: "⚡ Cation–π Interaction",
+                      color: "#ed64a6",
+                      dist: d,
+                      resAtom: ra,
+                      partnerAtom: pa,
+                      detail: `Electrostatic π-system interaction with basic group (${{d.toFixed(2)}} Å)`
+                    }});
+                  }}
+                }}
+
+                // 5. pi-pi Stacking (3.2 - 4.8 A)
+                if (resIsArom && partnerIsArom) {{
+                  if (d >= 3.2 && d <= 4.8) {{
+                    interactionsFound.push({{
+                      type: "pi_stacking",
+                      priority: 6,
+                      label: "⚡ π–π Stacking",
+                      color: "#4299e1",
+                      dist: d,
+                      resAtom: ra,
+                      partnerAtom: pa,
+                      detail: `Aromatic ring stacking / quadrupole interaction (${{d.toFixed(2)}} Å)`
+                    }});
+                  }}
+                }}
+
+                // 6. Hydrophobic Contact (< 4.5 A)
+                let resIsHydro = hydrophobicRes.has(ra.resn) || raElem === 'C';
+                let partnerIsHydro = hydrophobicRes.has(pa.resn) || paElem === 'C';
+                if (resIsHydro && partnerIsHydro && raElem === 'C' && paElem === 'C') {{
+                  if (d <= 4.5) {{
+                    interactionsFound.push({{
+                      type: "hydrophobic",
+                      priority: 5,
+                      label: "Hydrophobic Contact",
+                      color: "#ed8936",
+                      dist: d,
+                      resAtom: ra,
+                      partnerAtom: pa,
+                      detail: `Non-polar carbon dispersion / desolvation contact (${{d.toFixed(2)}} Å)`
+                    }});
+                  }}
+                }}
+
+                // 7. Van der Waals Contact (< 4.2 A)
+                if (d <= 4.2) {{
+                  interactionsFound.push({{
+                    type: "vdw",
+                    priority: 4,
+                    label: "Van der Waals Contact",
+                    color: "#38b2ac",
+                    dist: d,
+                    resAtom: ra,
+                    partnerAtom: pa,
+                    detail: `Close steric contact (${{d.toFixed(2)}} Å)`
+                  }});
+                }}
+              }}
+            }}
+
+            if (interactionsFound.length > 0) {{
+              interactionsFound.sort((a, b) => (b.priority - a.priority) || (a.dist - b.dist));
+              let best = interactionsFound[0];
+              return {{
+                type: best.type,
+                label: best.label,
+                color: best.color,
+                dist: best.dist,
+                resAtom: best.resAtom,
+                partnerAtom: best.partnerAtom,
+                detail: best.detail
+              }};
+            }}
+
+            if (minDist <= 5.5) {{
+              return {{
+                type: "pocket_lining",
+                label: "Pocket Lining Residue",
+                color: "#a0aec0",
+                dist: minDist,
+                resAtom: bestResAtom,
+                partnerAtom: bestPartnerAtom,
+                detail: `Cavity residue in proximity to partner (${{minDist.toFixed(2)}} Å)`
+              }};
+            }}
+
+            return {{
+              type: "surface",
+              label: "No Direct Contact",
+              color: "#718096",
+              dist: minDist,
+              resAtom: bestResAtom,
+              partnerAtom: bestPartnerAtom,
+              detail: `Solvent-exposed surface residue (${{minDist.toFixed(2)}} Å from partner)`
+            }};
+          }}
+
+          function onHoverAtom(atom, viewer) {{
+            if (!glviewer || !atom) return;
+            if (lastHoveredAtom && lastHoveredAtom === atom) return;
+
+            clearHoverHighlights();
+            lastHoveredAtom = atom;
+
+            let isReceptor = false;
+            if (protModel && atom.model === protModel.getID()) {{
+              isReceptor = true;
+            }} else if (ligModel && atom.model === ligModel.getID()) {{
+              isReceptor = false;
+            }} else if (atom.resn && AA_NAMES[atom.resn]) {{
+              isReceptor = true;
+            }}
+
+            let resAtoms = [];
+            let partnerAtoms = [];
+            let resStr = "";
+            let aaFullName = "";
+
+            if (isReceptor) {{
+              let resi = atom.resi;
+              let resn = atom.resn || 'UNK';
+              let chain = atom.chain || '';
+              aaFullName = AA_NAMES[resn] ? `${{resn}} (${{AA_NAMES[resn]}})` : resn;
+              resStr = `Receptor ${{chain ? chain + ':' : ''}}${{resn}}${{resi}}`;
+
+              resAtoms = protModel ? (protModel.selectedAtoms({{chain: chain, resi: resi}}) || []) : [];
+              if (!resAtoms.length && protModel) {{
+                resAtoms = protModel.selectedAtoms({{resi: resi}}) || [];
+              }}
+              if (!resAtoms.length) resAtoms = [atom];
+
+              partnerAtoms = (ligModel !== null) ? (ligModel.selectedAtoms({{}}) || []) : [];
+
+              for (let i = 0; i < resAtoms.length; i++) {{
+                let a = resAtoms[i];
+                let aElem = (a.elem || (a.atom ? a.atom.replace(/[^a-zA-Z]/g, '').slice(0, 1) : '')).toUpperCase();
+                if (aElem === 'H') continue;
+
+                let sph = glviewer.addSphere({{
+                  center: {{x: a.x, y: a.y, z: a.z}},
+                  radius: 0.28,
+                  color: '#f6e05e',
+                  opacity: 0.95
+                }});
+                if (sph) hoverShapes.push(sph);
+
+                for (let j = i + 1; j < resAtoms.length; j++) {{
+                  let b = resAtoms[j];
+                  let bElem = (b.elem || (b.atom ? b.atom.replace(/[^a-zA-Z]/g, '').slice(0, 1) : '')).toUpperCase();
+                  if (bElem === 'H') continue;
+                  let dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+                  let d2 = dx*dx + dy*dy + dz*dz;
+                  if (d2 >= 1.30 && d2 <= 3.50) {{
+                    let cyl = glviewer.addCylinder({{
+                      start: {{x: a.x, y: a.y, z: a.z}},
+                      end: {{x: b.x, y: b.y, z: b.z}},
+                      radius: 0.16,
+                      color: '#f6e05e',
+                      opacity: 0.95,
+                      fromCap: 1,
+                      toCap: 1
+                    }});
+                    if (cyl) hoverShapes.push(cyl);
+                  }}
+                }}
+              }}
+            }} else {{
+              let atomName = atom.atom || atom.elem || 'LIG';
+              let ser = atom.serial ? `#${{atom.serial}}` : '';
+              resStr = `Ligand Atom ${{atomName}} ${{ser}}`.trim();
+              aaFullName = atom.elem || "Ligand";
+              resAtoms = [atom];
+              partnerAtoms = (protModel !== null) ? (protModel.selectedAtoms({{}}) || []) : [];
+
+              let sph = glviewer.addSphere({{
+                center: {{x: atom.x, y: atom.y, z: atom.z}},
+                radius: 0.44,
+                color: '#f6e05e',
+                opacity: 0.95
+              }});
+              if (sph) hoverShapes.push(sph);
+            }}
+
+            let inter = classifyInteraction(resAtoms, partnerAtoms);
+
+            if (inter.partnerAtom && inter.dist <= 5.0) {{
+              let sph = glviewer.addSphere({{
+                center: {{x: inter.partnerAtom.x, y: inter.partnerAtom.y, z: inter.partnerAtom.z}},
+                radius: 0.40,
+                color: inter.color,
+                opacity: 0.90
+              }});
+              if (sph) hoverShapes.push(sph);
+
+              let cyl = glviewer.addCylinder({{
+                start: {{x: inter.resAtom.x, y: inter.resAtom.y, z: inter.resAtom.z}},
+                end: {{x: inter.partnerAtom.x, y: inter.partnerAtom.y, z: inter.partnerAtom.z}},
+                radius: 0.10,
+                dashed: true,
+                color: inter.color,
+                fromCap: 1,
+                toCap: 1
+              }});
+              if (cyl) hoverShapes.push(cyl);
+            }}
+
+            let distTxt = (inter.dist < 100) ? `${{inter.dist.toFixed(2)}} Å` : "No contact";
+            let labelContent = `${{resStr}}\n${{inter.label}} (${{distTxt}})`;
+            let lbl = glviewer.addLabel(labelContent, {{
+              position: {{x: atom.x, y: atom.y, z: atom.z}},
+              backgroundColor: "#0f172a",
+              backgroundOpacity: 0.92,
+              fontColor: "#ffffff",
+              fontSize: 12,
+              borderColor: inter.color,
+              borderThickness: 1.5,
+              inFront: true
+            }});
+            if (lbl) hoverLabels.push(lbl);
+
+            let hudElem = document.getElementById("sm_interaction_hud");
+            if (hudElem) hudElem.style.display = "block";
+
+            let hudMain = document.getElementById("sm_hud_main");
+            let hudBadge = document.getElementById("sm_hud_badge");
+            if (hudMain) {{
+              let partnerDesc = inter.partnerAtom 
+                ? `${{isReceptor ? 'Ligand' : 'Receptor'}} ${{inter.partnerAtom.resn || ''}}${{inter.partnerAtom.resi ? ':' + inter.partnerAtom.resi : ''}} (${{inter.partnerAtom.atom || inter.partnerAtom.elem}})`
+                : "None";
+
+              hudMain.innerHTML = `
+                <span style="font-weight: 700; color: #f6e05e;">[${{resStr}} ${{aaFullName}}]</span>
+                <span style="color: #cbd5e1;">↔</span>
+                <span style="color: #ffffff; font-weight: 600;">${{partnerDesc}}</span>
+                <span style="color: #94a3b8; font-size: 12px;">(${{inter.detail}})</span>
+              `;
+            }}
+            if (hudBadge) {{
+              hudBadge.innerHTML = `
+                <span class="badge" style="background: ${{inter.color}}; color: #ffffff; padding: 4px 10px; border-radius: 4px; font-weight: 700;">
+                  ${{inter.label}}
+                </span>
+              `;
+            }}
+
+            glviewer.render();
+          }}
+
+          function onUnhoverAtom(atom, viewer) {{
+            clearHoverHighlights();
+            lastHoveredAtom = null;
+
+            let hudElem = document.getElementById("sm_interaction_hud");
+            if (hudElem) hudElem.style.display = "none";
+            let hudMain = document.getElementById("sm_hud_main");
+            let hudBadge = document.getElementById("sm_hud_badge");
+            if (hudMain) {{
+              hudMain.innerHTML = "";
+            }}
+            if (hudBadge) {{
+              hudBadge.innerHTML = "";
+            }}
+
+            if (glviewer) glviewer.render();
+          }}
 
           const allDockedData = {docked_data_json};
           const protData = {clean_protein};
@@ -1192,10 +1592,34 @@ def _build_html_template(
 
           function init3DViewer() {{
             let container = document.getElementById("pose3d_viewer");
-            if (!container) return;
+            if (!container || !window.$3Dmol) return;
 
             let config = {{ backgroundColor: "#1a202c" }};
             glviewer = $3Dmol.createViewer(container, config);
+            glviewer.setHoverDuration(20);
+
+            if (!container._hasHoverMoveListener) {{
+              container._hasHoverMoveListener = true;
+              let lastMoveTime = 0;
+              container.addEventListener("mousemove", function(e) {{
+                let now = Date.now();
+                if (now - lastMoveTime > 30 && glviewer && glviewer.mouseXY && glviewer.hoverables && glviewer.hoverables.length > 0) {{
+                  lastMoveTime = now;
+                  let s = glviewer.mouseXY(e.pageX, e.pageY);
+                  if (s && s.x >= -1 && s.x <= 1 && s.y >= -1 && s.y <= 1) {{
+                    try {{
+                      glviewer.handleHoverSelection(s.x, s.y, e);
+                    }} catch (err) {{}}
+                  }}
+                }}
+              }}, {{passive: true}});
+              container.addEventListener("mouseleave", function(e) {{
+                if (glviewer) {{
+                  try {{ glviewer.setHover(null); }} catch (err) {{}}
+                  onUnhoverAtom(null, glviewer);
+                }}
+              }});
+            }}
 
             if (protData && protData.length > 20) {{
               protModel = glviewer.addModel(protData, "pdb");
@@ -1266,6 +1690,7 @@ def _build_html_template(
 
           function loadActivePose() {{
             if (!glviewer) return;
+            clearHoverHighlights();
             let ligSelect = document.getElementById("ligand_select");
             let poseSelect = document.getElementById("pose_select");
             if (!ligSelect || !poseSelect) return;
@@ -1322,148 +1747,207 @@ def _build_html_template(
             focusLigand();
           }}
 
+          function getProteinStyleObj(style, color) {{
+            let styleObj = {{}};
+            let colOpt = {{}};
+            if (color === "spectrum") {{
+              colOpt = {{ colorscheme: "spectrum" }};
+            }} else if (color === "ss") {{
+              colOpt = {{ colorscheme: "ssJmol" }};
+            }} else if (color === "b") {{
+              colOpt = {{ colorscheme: "bFactor" }};
+            }} else if (color === "cyan") {{
+              colOpt = {{ color: "cyan" }};
+            }} else {{
+              colOpt = {{ colorscheme: "spectrum" }};
+            }}
+
+            if (style === "cartoon") {{
+              styleObj.cartoon = colOpt;
+            }} else if (style === "ribbon") {{
+              styleObj.cartoon = Object.assign({{ ribbon: true, thickness: 0.35, style: "oval" }}, colOpt);
+            }} else if (style === "stick" || style === "sticks") {{
+              styleObj.stick = colOpt;
+            }} else if (style === "line" || style === "wireframe") {{
+              styleObj.line = colOpt;
+            }} else if (style === "surface" || style === "cartoon_surface") {{
+              styleObj.cartoon = Object.assign({{ opacity: 0.25 }}, colOpt);
+            }}
+            styleObj.clicksphere = {{ radius: 1.2 }};
+            return styleObj;
+          }}
+
+          function getLigandStyleObj(style, color) {{
+            let styleObj = {{}};
+            let colOpt = {{}};
+            if (color === "orangeCarbon") {{
+              colOpt = {{ colorscheme: "orangeCarbon" }};
+            }} else if (color === "element") {{
+              colOpt = {{ colorscheme: "rasmol" }};
+            }} else if (color === "spectrum") {{
+              colOpt = {{ colorscheme: "spectrum" }};
+            }} else {{
+              colOpt = {{ colorscheme: "greenCarbon" }};
+            }}
+
+            if (style === "stick" || style === "sticks") {{
+              styleObj.stick = Object.assign({{ radius: 0.25 }}, colOpt);
+            }} else if (style === "ballAndStick" || style === "ball_stick") {{
+              styleObj.stick = Object.assign({{ radius: 0.18 }}, colOpt);
+              styleObj.sphere = Object.assign({{ scale: 0.28 }}, colOpt);
+            }} else if (style === "sphere" || style === "spheres") {{
+              styleObj.sphere = Object.assign({{ scale: 0.85 }}, colOpt);
+            }} else if (style === "surface") {{
+              styleObj.stick = Object.assign({{ radius: 0.2 }}, colOpt);
+            }}
+            styleObj.clicksphere = {{ radius: 1.2 }};
+            return styleObj;
+          }}
+
           function applyStyles() {{
             if (!glviewer) return;
 
-            // Synchronously remove and dispose all previous surfaces to prevent WebGL lockups
+            clearHoverHighlights();
+            // Synchronously remove and dispose all previous surfaces & shapes
             glviewer.removeAllSurfaces();
+            glviewer.removeAllShapes();
 
-            // 1. Protein styles
+            let protStyleElem = document.getElementById("proteinStyle");
+            let protColorElem = document.getElementById("proteinColor");
+            let ligStyleElem = document.getElementById("ligandStyle");
+            let ligColorElem = document.getElementById("ligandColor");
+            let chkProt = document.getElementById("chkProtein");
+            let chkLig = document.getElementById("chkLigand");
+            let chkPocket = document.getElementById("chk_pocket_residues");
+            let chkHbonds = document.getElementById("chkHbonds");
+
+            let protStyle = protStyleElem ? protStyleElem.value : "cartoon";
+            let protColor = protColorElem ? protColorElem.value : "spectrum";
+            let ligStyle = ligStyleElem ? ligStyleElem.value : "stick";
+            let ligColor = ligColorElem ? ligColorElem.value : "greenCarbon";
+            let showProt = chkProt ? chkProt.checked : true;
+            let showLig = chkLig ? chkLig.checked : true;
+            let showPocket = chkPocket ? chkPocket.checked : true;
+            let showHbonds = chkHbonds ? chkHbonds.checked : false;
+
+            // Compute pocket residues within 5Å of ligand
+            activePocketResis = new Set();
+            let pocketResis = activePocketResis;
+            let protAtoms = (protModel !== null) ? (protModel.selectedAtoms({{}}) || []) : [];
+            let ligAtoms = (ligModel !== null) ? (ligModel.selectedAtoms({{}}) || []) : [];
+
+            if (ligAtoms.length > 0 && protAtoms.length > 0) {{
+              for (let i = 0; i < ligAtoms.length; i++) {{
+                let la = ligAtoms[i];
+                for (let j = 0; j < protAtoms.length; j++) {{
+                  let pa = protAtoms[j];
+                  let dx = la.x - pa.x, dy = la.y - pa.y, dz = la.z - pa.z;
+                  if (dx > 5.5 || dx < -5.5 || dy > 5.5 || dy < -5.5 || dz > 5.5 || dz < -5.5) continue;
+                  if (dx * dx + dy * dy + dz * dz <= 25.0) {{
+                    pocketResis.add(pa.resi);
+                  }}
+                }}
+              }}
+            }}
+
+            // 1. Protein rendering
             if (protModel !== null) {{
-              let protColor = "spectrum";
               protModel.setStyle({{}}, {{}});
+              if (showProt) {{
+                let pObj = getProteinStyleObj(protStyle, protColor);
+                protModel.setStyle({{}}, pObj);
 
-              let protAtoms = protModel.selectedAtoms({{}}) || [];
-              let ligAtoms = (ligModel !== null) ? (ligModel.selectedAtoms({{}}) || []) : [];
-
-              // Compute pocket residues around the ligand in 3D cavity
-              let pocketResis = new Set();
-              if (ligAtoms.length > 0 && protAtoms.length > 0) {{
-                for (let i = 0; i < ligAtoms.length; i++) {{
-                  let la = ligAtoms[i];
-                  for (let j = 0; j < protAtoms.length; j++) {{
-                    let pa = protAtoms[j];
-                    let dx = la.x - pa.x;
-                    if (dx > 8.0 || dx < -8.0) continue;
-                    let dy = la.y - pa.y;
-                    if (dy > 8.0 || dy < -8.0) continue;
-                    let dz = la.z - pa.z;
-                    if (dz > 8.0 || dz < -8.0) continue;
-                    if (dx * dx + dy * dy + dz * dz <= 64.0) {{
-                      pocketResis.add(pa.resi);
-                    }}
-                  }}
+                if (protStyle === "surface" || protStyle === "cartoon_surface") {{
+                  let surfColor = protColor === "cyan" ? "cyan" : (isDarkMode ? "white" : "#cbd5e1");
+                  let surfSel = (pocketResis.size > 0) ? {{model: protModel, resi: Array.from(pocketResis)}} : {{model: protModel}};
+                  glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: protStyle === "surface" ? 0.65 : 0.35, color: surfColor}}, surfSel)
+                    .then(function() {{ glviewer.render(); }})
+                    .catch(function(e) {{ console.warn("Protein surface error:", e); }});
                 }}
-              }}
 
-              // Surface selection: strictly constrain surface to the active binding cavity to keep performance instantaneous and prevent massive memory mapping/WebGL crashes
-              let surfSel = null;
-              if (pocketResis.size > 0) {{
-                surfSel = {{model: protModel, resi: Array.from(pocketResis)}};
-              }} else if (ligModel !== null && ligAtoms.length > 0) {{
-                surfSel = {{
-                  model: protModel,
-                  within: {{distance: 8.0, sel: {{model: ligModel}}}}
-                }};
-              }} else {{
-                // Constrain to active region near center (max 10Å radius) to prevent browser memory crashes
-                let c = protModel.getSelectionCenter ? protModel.getSelectionCenter({{}}) : {{x:0, y:0, z:0}};
-                surfSel = {{
-                  model: protModel,
-                  predicate: function(a) {{
-                    let dx = a.x - c.x, dy = a.y - c.y, dz = a.z - c.z;
-                    return (dx * dx + dy * dy + dz * dz) <= 100.0;
-                  }}
-                }};
-              }}
-
-              let surfColor = isDarkMode ? "white" : "#cbd5e1";
-
-              if (currentProtStyle === "cartoon") {{
-                protModel.setStyle({{}}, {{cartoon: {{color: protColor, opacity: 0.85}}}});
-              }} else if (currentProtStyle === "surface") {{
-                if (pocketResis.size > 0) {{
-                  protModel.setStyle(
-                    {{resi: Array.from(pocketResis)}},
-                    {{stick: {{colorscheme: "amino", radius: 0.16}}}}
-                  );
-                }}
-                try {{
-                  glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.65, color: surfColor}}, surfSel);
-                }} catch (e) {{
-                  console.warn("Surface generation error:", e);
-                }}
-              }} else if (currentProtStyle === "cartoon_surface") {{
-                protModel.setStyle({{}}, {{cartoon: {{color: protColor, opacity: 0.85}}}});
-                try {{
-                  glviewer.addSurface($3Dmol.SurfaceType.VDW, {{opacity: 0.35, color: surfColor}}, surfSel);
-                }} catch (e) {{
-                  console.warn("Surface generation error:", e);
-                }}
-              }} else if (currentProtStyle === "sticks") {{
-                protModel.setStyle({{}}, {{stick: {{colorscheme: "amino", radius: 0.16}}}});
-              }} else if (currentProtStyle === "wireframe") {{
-                protModel.setStyle({{}}, {{line: {{colorscheme: "amino"}}}});
-              }} else if (currentProtStyle === "off") {{
-                protModel.setStyle({{}}, {{}});
-              }}
-
-              // Highlight pocket residues within 5Å of ligand when in cartoon or wireframe mode
-              if (showPocketResidues && ligModel !== null && currentProtStyle !== "off" && currentProtStyle !== "sticks" && currentProtStyle !== "surface") {{
-                if (pocketResis.size > 0) {{
+                if (showPocket && pocketResis.size > 0 && protStyle !== "stick" && protStyle !== "surface") {{
                   let resiList = Array.from(pocketResis);
-                  protModel.setStyle(
-                    {{resi: resiList}},
-                    {{stick: {{colorscheme: "amino", radius: 0.22}}, cartoon: {{color: protColor, opacity: 0.6}}}}
-                  );
+                  let comboObj = Object.assign({{}}, pObj, {{
+                    stick: {{ colorscheme: "amino", radius: 0.20 }}
+                  }});
+                  protModel.setStyle({{ resi: resiList }}, comboObj);
                 }}
               }}
             }}
 
-            // 2. Ligand styles
+            // 2. Ligand rendering
             if (ligModel !== null) {{
-              let carbonScheme = "greenCarbon";
               ligModel.setStyle({{}}, {{}});
-              if (currentLigStyle === "sticks") {{
-                ligModel.setStyle({{}}, {{stick: {{colorscheme: carbonScheme, radius: 0.28}}}});
-              }} else if (currentLigStyle === "ball_stick") {{
-                ligModel.setStyle({{}}, {{
-                  stick: {{colorscheme: carbonScheme, radius: 0.20}},
-                  sphere: {{radius: 0.45, colorscheme: carbonScheme}}
-                }});
-              }} else if (currentLigStyle === "spheres") {{
-                ligModel.setStyle({{}}, {{sphere: {{colorscheme: carbonScheme}}}});
+              if (showLig) {{
+                let lObj = getLigandStyleObj(ligStyle, ligColor);
+                ligModel.setStyle({{}}, lObj);
+
+                if (ligStyle === "surface") {{
+                  let pScheme = (ligColor === "orangeCarbon") ? "orangeCarbon" : "greenCarbon";
+                  glviewer.addSurface($3Dmol.SurfaceType.MS, {{opacity: 0.75, colorscheme: pScheme}}, {{model: ligModel}})
+                    .then(function() {{ glviewer.render(); }})
+                    .catch(function(e) {{ console.warn("Ligand surface error:", e); }});
+                }}
               }}
             }}
+
+            // 3. Hydrogen bonds
+            if (showHbonds && showProt && showLig && protModel !== null && ligModel !== null) {{
+              let donAcc = ['N', 'O', 'S', 'F'];
+              for (let i = 0; i < protAtoms.length; i++) {{
+                let pa = protAtoms[i];
+                if (!donAcc.includes(pa.elem)) continue;
+                for (let j = 0; j < ligAtoms.length; j++) {{
+                  let la = ligAtoms[j];
+                  if (!donAcc.includes(la.elem)) continue;
+                  let dx = pa.x - la.x, dy = pa.y - la.y, dz = pa.z - la.z;
+                  let d2 = dx*dx + dy*dy + dz*dz;
+                  if (d2 >= 5.76 && d2 <= 12.25) {{
+                    glviewer.addCylinder({{
+                      start: {{x: pa.x, y: pa.y, z: pa.z}},
+                      end: {{x: la.x, y: la.y, z: la.z}},
+                      radius: 0.08,
+                      dashed: true,
+                      color: "#f6e05e",
+                      fromCap: 1,
+                      toCap: 1
+                    }});
+                  }}
+                }}
+              }}
+            }}
+
+            // Register hover and click handlers across all atoms in loaded structure
+            glviewer.setHoverDuration(20);
+            glviewer.setHoverable({{}}, true, onHoverAtom, onUnhoverAtom);
+            glviewer.setClickable({{}}, true, onHoverAtom);
 
             glviewer.render();
           }}
 
-          function setProteinStyle(styleName, btn) {{
-            currentProtStyle = styleName;
-            if (btn && btn.parentElement) {{
-              btn.parentElement.querySelectorAll(".btn").forEach(function(b) {{
-                b.classList.remove("btn-active");
-              }});
-              btn.classList.add("btn-active");
+          function focusLigand() {{
+            if (!glviewer) return;
+            if (ligModel !== null) {{
+              glviewer.zoomTo({{model: ligModel}}, 800);
+            }} else if (protModel !== null) {{
+              glviewer.zoomTo({{model: protModel}}, 800);
+            }} else {{
+              glviewer.zoomTo();
             }}
-            applyStyles();
+            glviewer.render();
           }}
 
-          function setLigandStyle(styleName, btn) {{
-            currentLigStyle = styleName;
-            if (btn && btn.parentElement) {{
-              btn.parentElement.querySelectorAll(".btn").forEach(function(b) {{
-                b.classList.remove("btn-active");
-              }});
-              btn.classList.add("btn-active");
-            }}
-            applyStyles();
+          function zoomFullProtein() {{
+            reset3DView();
+          }}
+
+          function reset3DView() {{
+            if (!glviewer) return;
+            glviewer.zoomTo();
+            glviewer.render();
           }}
 
           function togglePocketResidues() {{
-            let chk = document.getElementById("chk_pocket_residues");
-            showPocketResidues = chk ? chk.checked : false;
             applyStyles();
           }}
 
@@ -1475,7 +1959,7 @@ def _build_html_template(
 
             let btn = document.getElementById("btn_bg_mode");
             if (btn) {{
-              btn.innerHTML = isDarkMode ? "Light Background" : "Dark Background";
+              btn.innerHTML = isDarkMode ? "Light BG" : "Dark BG";
             }}
             let container = document.getElementById("pose3d_viewer");
             if (container) {{
@@ -1484,28 +1968,16 @@ def _build_html_template(
             applyStyles();
           }}
 
-          function focusLigand() {{
-            if (!glviewer) return;
-            if (ligModel !== null) {{
-              glviewer.zoomTo({{model: ligModel}}, 400);
-            }} else if (protModel !== null) {{
-              glviewer.zoomTo({{model: protModel}}, 400);
-            }} else {{
-              glviewer.zoomTo();
-            }}
-            glviewer.render();
+          function setProteinStyle(styleName, btn) {{
+            let elem = document.getElementById("proteinStyle");
+            if (elem) {{ elem.value = styleName; }}
+            applyStyles();
           }}
 
-          function zoomFullProtein() {{
-            if (!glviewer) return;
-            glviewer.zoomTo();
-            glviewer.render();
-          }}
-
-          function reset3DView() {{
-            if (!glviewer) return;
-            glviewer.zoomTo();
-            glviewer.render();
+          function setLigandStyle(styleName, btn) {{
+            let elem = document.getElementById("ligandStyle");
+            if (elem) {{ elem.value = styleName; }}
+            applyStyles();
           }}
 
           function cleanupWebGL() {{
@@ -1701,6 +2173,14 @@ def _build_html_template(
       background: var(--primary) !important;
       color: #ffffff !important;
       border-color: var(--primary) !important;
+    }}
+    .btn-primary {{
+      background: var(--primary) !important;
+      color: #ffffff !important;
+      border-color: var(--primary) !important;
+    }}
+    .btn-primary:hover {{
+      background: #23568c !important;
     }}
     .style-btn-group {{
       display: inline-flex;

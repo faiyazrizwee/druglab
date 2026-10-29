@@ -52,3 +52,4 @@ test_interactive2.py
 test_lead_opt.py
 test_lead_selection.py
 test_workflow.py
+.licenses/

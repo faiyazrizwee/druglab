@@ -1043,6 +1043,14 @@ def launch_pocket_gui(
         pass
 
     # 5. Wait for browser submission or terminal Enter
+    # Flush any unread terminal input (such as leftover newline from preceding prompt)
+    try:
+        import termios
+        if hasattr(sys.stdin, "fileno"):
+            termios.tcflush(sys.stdin, termios.TCIFLUSH)
+    except Exception:
+        pass
+
     terminal_choice_done = False
     start_wait = time.time()
     try:
