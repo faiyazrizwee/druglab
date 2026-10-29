@@ -364,9 +364,10 @@ def _build_pocket_gui_html(
     <!-- 3Dmol WebGL Canvas -->
     <div id="viewer_container">
       <div class="viewer-overlay">
-        <button class="btn" onclick="focusBox()" title="Center camera directly on docking box">Focus Box</button>
+        <button class="btn" onclick="focusBox()" title="Focus camera on active pocket cavity and docking box">Focus Pocket</button>
         <button class="btn" onclick="zoomFullProtein()" title="View whole target protein">Full Protein</button>
-        <button class="btn" onclick="resetToInitial()" title="Reset to Pocket 1">Reset</button>
+        <button class="btn" id="btn_toggle_residues" onclick="togglePocketResidues()" title="Toggle display of pocket lining residues">Residues: ON</button>
+        <button class="btn" onclick="resetToInitial()" title="Reset to Pocket 1 (Best Pocket)">Reset</button>
       </div>
       <div id="glviewer_canvas"></div>
     </div>
@@ -383,7 +384,12 @@ def _build_pocket_gui_html(
 
       <!-- Live Coordinates Card (User Required Format) -->
       <div class="card">
-        <div class="card-title">Active Coordinates</div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <div class="card-title" style="margin-bottom: 0;">Active Coordinates</div>
+          <span id="pocket_badge" style="background: #0284c7; color: #ffffff; font-size: 10px; font-weight: 700; padding: 2px 8px; text-transform: uppercase; letter-spacing: 0.5px;">
+            Pocket 1 (Best)
+          </span>
+        </div>
         <div id="live_coords_panel" class="coords-display">
     Center:
       X = {initial_center[0]:.3f}
@@ -489,6 +495,7 @@ def _build_pocket_gui_html(
   <script>
     let glviewer = null;
     let protModel = null;
+    let showPocketResidues = true;
     const proteinData = {protein_json};
     const detectedPockets = {pockets_json};
     const initialCenter = [{initial_center[0]}, {initial_center[1]}, {initial_center[2]}];
@@ -507,6 +514,13 @@ def _build_pocket_gui_html(
       updateUI();
     }});
 
+    window.addEventListener("resize", function() {{
+      if (glviewer) {{
+        glviewer.resize();
+        glviewer.render();
+      }}
+    }});
+
     // Global Enter key listener
     window.addEventListener("keydown", function(e) {{
       if (e.key === "Enter") {{
@@ -514,6 +528,46 @@ def _build_pocket_gui_html(
         submitCoordinates();
       }}
     }});
+
+    function getPocketSelection() {{
+      return {{
+        predicate: function(atom) {{
+          let dx = atom.x - cx;
+          let dy = atom.y - cy;
+          let dz = atom.z - cz;
+          let maxD = Math.max(sx, sy, sz) * 0.75 + 4.0;
+          return (dx * dx + dy * dy + dz * dz) <= (maxD * maxD);
+        }}
+      }};
+    }}
+
+    function updateProteinStyles() {{
+      if (!glviewer || !protModel) return;
+
+      // Base: cartoon representation of entire protein
+      glviewer.setStyle({{}}, {{ cartoon: {{ color: "spectrum", opacity: 0.82 }} }});
+
+      // Highlight pocket lining residues in warm amber sticks
+      if (showPocketResidues) {{
+        let sel = getPocketSelection();
+        let atoms = glviewer.getAtomsFromSel(sel);
+        if (atoms && atoms.length > 0) {{
+          glviewer.addStyle(sel, {{
+            stick: {{ color: "#f59e0b", radius: 0.22, opacity: 0.95 }}
+          }});
+        }}
+      }}
+      glviewer.render();
+    }}
+
+    function togglePocketResidues() {{
+      showPocketResidues = !showPocketResidues;
+      let btn = document.getElementById("btn_toggle_residues");
+      if (btn) {{
+        btn.textContent = showPocketResidues ? "Residues: ON" : "Residues: OFF";
+      }}
+      updateProteinStyles();
+    }}
 
     function initViewer() {{
       let container = document.getElementById("glviewer_canvas");
@@ -523,16 +577,12 @@ def _build_pocket_gui_html(
 
       if (proteinData && proteinData.length > 20) {{
         protModel = glviewer.addModel(proteinData, "pdb");
-        glviewer.setStyle({{}}, {{cartoon: {{color: "spectrum", opacity: 0.75}}}});
+        updateProteinStyles();
       }}
 
       update3DBox();
       glviewer.zoomTo();
       glviewer.render();
-
-      setTimeout(function() {{
-        focusBox();
-      }}, 300);
     }}
 
     function initPresets() {{
@@ -545,12 +595,13 @@ def _build_pocket_gui_html(
           let btn = document.createElement("button");
           btn.type = "button";
           btn.className = "btn btn-pocket" + (idx === 0 ? " active" : "");
-          let scoreTxt = p.score ? (" (score: " + Math.round(p.score) + ")") : "";
-          btn.textContent = "Pocket " + (idx + 1) + scoreTxt;
+          let scoreTxt = p.score ? (" · " + Math.round(p.score)) : "";
+          let label = (idx === 0) ? ("Pocket 1 ★ Best" + scoreTxt) : ("Pocket " + (idx + 1) + scoreTxt);
+          btn.textContent = label;
           btn.onclick = function() {{
             document.querySelectorAll(".btn-pocket").forEach(b => b.classList.remove("active"));
             btn.classList.add("active");
-            applyPocketPreset(p);
+            applyPocketPreset(p, idx);
           }};
           container.appendChild(btn);
         }});
@@ -563,7 +614,7 @@ def _build_pocket_gui_html(
       }}
     }}
 
-    function applyPocketPreset(p) {{
+    function applyPocketPreset(p, idx) {{
       if (!p || !p.center || !p.size) return;
       cx = p.center[0];
       cy = p.center[1];
@@ -585,6 +636,12 @@ def _build_pocket_gui_html(
       document.getElementById("input_sy").value = sy.toFixed(1);
       document.getElementById("slider_sz").value = sz;
       document.getElementById("input_sz").value = sz.toFixed(1);
+
+      let badge = document.getElementById("pocket_badge");
+      if (badge) {{
+        badge.textContent = (idx === 0) ? "Pocket 1 (Best)" : ("Pocket " + (idx + 1));
+        badge.style.background = "#0284c7";
+      }}
 
       updateUI();
       focusBox();
@@ -619,6 +676,14 @@ def _build_pocket_gui_html(
       if (input) {{
         input.value = (prop.startsWith("c") ? val.toFixed(3) : val.toFixed(1));
       }}
+
+      let badge = document.getElementById("pocket_badge");
+      if (badge) {{
+        badge.textContent = "Custom Tuned";
+        badge.style.background = "#475569";
+      }}
+      document.querySelectorAll(".btn-pocket").forEach(b => b.classList.remove("active"));
+
       updateUI();
       notifyCoordinates();
     }}
@@ -639,6 +704,14 @@ def _build_pocket_gui_html(
         if (val > parseFloat(slider.max)) slider.max = Math.ceil(val + 10);
         slider.value = val;
       }}
+
+      let badge = document.getElementById("pocket_badge");
+      if (badge) {{
+        badge.textContent = "Custom Tuned";
+        badge.style.background = "#475569";
+      }}
+      document.querySelectorAll(".btn-pocket").forEach(b => b.classList.remove("active"));
+
       updateUI();
       notifyCoordinates();
     }}
@@ -668,6 +741,7 @@ def _build_pocket_gui_html(
       }}
 
       update3DBox();
+      updateProteinStyles();
     }}
 
     function update3DBox() {{
@@ -703,15 +777,18 @@ def _build_pocket_gui_html(
 
     function focusBox() {{
       if (!glviewer) return;
-      glviewer.center({{ x: cx, y: cy, z: cz }});
-      glviewer.zoom(1.8, 300);
-      glviewer.render();
+      let sel = getPocketSelection();
+      let atoms = glviewer.getAtomsFromSel(sel);
+      if (atoms && atoms.length > 0) {{
+        glviewer.zoomTo(sel, 400);
+      }} else {{
+        glviewer.zoomTo({{}}, 400);
+      }}
     }}
 
     function zoomFullProtein() {{
       if (!glviewer) return;
-      glviewer.zoomTo();
-      glviewer.render();
+      glviewer.zoomTo({{}}, 400);
     }}
 
     function resetToInitial() {{
@@ -736,8 +813,19 @@ def _build_pocket_gui_html(
       document.getElementById("slider_sz").value = sz;
       document.getElementById("input_sz").value = sz.toFixed(1);
 
+      let badge = document.getElementById("pocket_badge");
+      if (badge) {{
+        badge.textContent = "Pocket 1 (Best)";
+        badge.style.background = "#0284c7";
+      }}
+      document.querySelectorAll(".btn-pocket").forEach((b, idx) => {{
+        if (idx === 0) b.classList.add("active");
+        else b.classList.remove("active");
+      }});
+
       updateUI();
       focusBox();
+      notifyCoordinates();
     }}
 
     function submitCoordinates() {{
@@ -841,6 +929,12 @@ def launch_pocket_gui(
                 protein_pdb_text = f.read()
         except Exception:
             protein_pdb_text = ""
+
+    if not protein_pdb_text and doc is not None:
+        try:
+            protein_pdb_text = doc.make_pdb_string()
+        except Exception:
+            pass
 
     if doc is not None:
         try:

@@ -189,9 +189,14 @@ def detect_pockets(
         selected_pocket = best_pocket
         selection_method = "best_score"
 
+        if interactive:
+            selected_pocket, selection_method = prompt_pocket_confirmation_with_selection(
+                pockets, max_box_dimension=max_box_dimension, doc=doc, protein_pdb=protein_pdb
+            )
+
         docking_box = {
-            "center": best_pocket["center"],
-            "size": best_pocket["size"]
+            "center": selected_pocket["center"],
+            "size": selected_pocket["size"]
         }
     else:
         raise ValueError(f"Unknown pocket detection method: {method}")

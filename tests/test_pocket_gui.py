@@ -70,6 +70,10 @@ def test_build_pocket_gui_html(sample_pockets):
     assert "addSphere" in html
     assert "e.key === \"Enter\"" in html
     assert "border-radius: 0" in html
+    assert "Pocket 1 (Best)" in html
+    assert "updateProteinStyles" in html
+    assert "focusBox" in html
+    assert "Pocket 1 ★ Best" in html
 
 
 def test_pocket_gui_http_endpoints(sample_pockets):
@@ -177,3 +181,18 @@ def test_display_selected_pocket_summary(sample_pockets, capsys):
     assert "110.983" in captured
     assert "113.918" in captured
     assert "115.921" in captured
+
+
+def test_launch_pocket_gui_with_doc_pdb_fallback(sample_pockets):
+    from unittest.mock import MagicMock
+    mock_doc = MagicMock()
+    mock_doc.make_pdb_string.return_value = "ATOM      1  CA  ALA A   1      10.0  20.0  30.0"
+    with patch("webbrowser.open"):
+        selected, method = launch_pocket_gui(
+            sample_pockets,
+            doc=mock_doc,
+            protein_pdb="/nonexistent/path.pdb",
+            timeout=0.1,
+        )
+        assert method == "graphical_gui"
+        assert selected["center"] == [110.983, 113.918, 115.921]
