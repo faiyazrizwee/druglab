@@ -1415,12 +1415,12 @@ def _exec_pocket_detection(ctx: dict, config: DrugLabConfig) -> dict:
         if is_standalone:
             # Full interactive selection menu
             selected, method = interactive_pocket_selection(
-                pockets, max_dim, doc
+                pockets, max_dim, doc, protein_pdb=protein_pdb
             )
         else:
             # Pipeline: confirmation prompt + fallback to selection menu
             selected, method = prompt_pocket_confirmation_with_selection(
-                pockets, max_dim, doc
+                pockets, max_dim, doc, protein_pdb=protein_pdb
             )
 
         # Update result with user's selection
@@ -1438,8 +1438,8 @@ def _exec_pocket_detection(ctx: dict, config: DrugLabConfig) -> dict:
         write_json(selected, os.path.join(pocket_dir, "selected_pocket.json"))
         write_json(res["docking_box"], os.path.join(pocket_dir, "docking_box.json"))
 
-        # Write manual_pocket.json if manual entry was used
-        if method == "manual":
+        # Write manual_pocket.json if manual entry or graphical GUI was used
+        if method in ("manual", "graphical_gui"):
             write_json(selected, os.path.join(pocket_dir, "manual_pocket.json"))
 
     # Store in context

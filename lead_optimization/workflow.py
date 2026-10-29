@@ -97,7 +97,9 @@ def run_lead_optimization(
             doc = gemmi.read_structure(clean_pdb)
             max_dim = config.pocket.max_box_dimension if config else 30.0
             
-            selected, method = interactive_pocket_selection(pockets, max_dim, doc)
+            selected, method = interactive_pocket_selection(
+                pockets, max_dim, doc, protein_pdb=clean_pdb
+            )
             docking_box = {
                 "center": selected["center"],
                 "size": selected["size"]
