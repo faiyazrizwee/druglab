@@ -20,6 +20,45 @@ from utils.logger import setup_logger
 logger = setup_logger("lightdock_runner", level="INFO")
 
 
+# Standard amino acids supported by LightDock potential functions (AMBER94 / DFIRE)
+STANDARD_LIGHTDOCK_AMINO_ACIDS = {
+    "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
+    "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
+    "HID", "HIE", "HIP", "MSE", "CYX", "ASH", "GLH", "LYN"
+}
+
+
+def sanitize_structure_for_lightdock(input_pdb: str | Path, output_pdb: str | Path) -> None:
+    """
+    Sanitize PDB structure for LightDock simulation.
+    Strips unsupported heteroatoms (metal ions, non-standard ligands, waters)
+    to prevent LightDock scoring function failures (e.g. NotSupportedInScoringError in CPyDock/DFIRE).
+    """
+    input_path = Path(input_pdb)
+    output_path = Path(output_pdb)
+    lines_written = 0
+    with open(input_path, "r", encoding="utf-8", errors="ignore") as f_in, \
+         open(output_path, "w", encoding="utf-8") as f_out:
+        for line in f_in:
+            if line.startswith(("ATOM", "HETATM")):
+                res_name = line[17:20].strip().upper()
+                # Exclude water, ions, and non-standard hetero residues
+                if res_name in {"HOH", "WAT", "H2O", "TIP3", "MG", "ZN", "CA", "FE", "MN", "CU", "NA", "K", "CL"}:
+                    continue
+                if res_name not in STANDARD_LIGHTDOCK_AMINO_ACIDS:
+                    continue
+                # Normalize HETATM to ATOM for standard residues
+                clean_line = "ATOM  " + line[6:] if line.startswith("HETATM") else line
+                f_out.write(clean_line)
+                lines_written += 1
+            elif line.startswith(("TER", "ENDMDL", "END")):
+                f_out.write(line)
+
+    if lines_written == 0:
+        # Fallback if no lines matched standard residues
+        shutil.copyfile(str(input_path), str(output_path))
+
+
 @dataclass
 class LightDockRunResult:
     candidate_id: str
@@ -124,11 +163,11 @@ def run_lightdock_docking(
     version_str = get_lightdock_version()
     swarms, steps, glowworms = config.resolve_sampling()
 
-    # Copy / link input structures into work_dir to keep LightDock setup contained
+    # Copy & sanitize input structures into work_dir to keep LightDock setup contained
     local_rec = Path(work_dir) / "receptor.pdb"
     local_pep = Path(work_dir) / "peptide.pdb"
-    shutil.copyfile(str(receptor_pdb), str(local_rec))
-    shutil.copyfile(str(peptide_pdb), str(local_pep))
+    sanitize_structure_for_lightdock(receptor_pdb, local_rec)
+    sanitize_structure_for_lightdock(peptide_pdb, local_pep)
 
     local_rst = None
     if restraints_path and os.path.isfile(restraints_path):
@@ -236,11 +275,31 @@ def run_lightdock_docking(
         pass
 
     # --- STEP 2: Simulation ---
+    scoring_arg = config.scoring_function
+    if config.scoring_function == "combined":
+        scoring_conf_path = Path(work_dir) / "scoring.conf"
+        weights = getattr(config, "scoring_weights", None) or {"cpydock": 0.5, "dfire2": 0.5}
+        with open(scoring_conf_path, "w", encoding="utf-8") as scf:
+            scf.write("# LightDock combined scoring configuration\n")
+            for sf_name, weight in weights.items():
+                scf.write(f"{sf_name} {weight}\n")
+        scoring_arg = "scoring.conf"
+    elif getattr(config, "custom_scoring_file", None) and os.path.isfile(config.custom_scoring_file):
+        scoring_conf = Path(config.custom_scoring_file)
+        dest_conf = Path(work_dir) / scoring_conf.name
+        shutil.copyfile(str(scoring_conf), str(dest_conf))
+        scoring_arg = scoring_conf.name
+    elif os.path.isfile(config.scoring_function):
+        scoring_conf = Path(config.scoring_function)
+        dest_conf = Path(work_dir) / scoring_conf.name
+        shutil.copyfile(str(scoring_conf), str(dest_conf))
+        scoring_arg = scoring_conf.name
+
     sim_cmd = [
         dock_exe,
         "setup.json",
         str(steps),
-        "-s", config.scoring_function,
+        "-s", scoring_arg,
         "-c", str(cpu_cores),
         "-sg", str(config.seed),
     ]

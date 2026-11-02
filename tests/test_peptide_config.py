@@ -81,3 +81,24 @@ filtering:
     assert cfg.lightdock.scoring_function == "dfire"
     assert cfg.filtering.min_length_aa == 6
     assert cfg.filtering.max_length_aa == 25
+
+
+def test_scoring_function_options(tmp_path):
+    for sf in ["fastdfire", "dfire2", "cpydock", "combined"]:
+        cfg = PeptideDockingConfig()
+        cfg.lightdock.scoring_function = sf
+        cfg.validate()
+
+    custom_conf = tmp_path / "custom.conf"
+    custom_conf.write_text("cpydock 0.5\ndfire2 0.5\n")
+    cfg = PeptideDockingConfig()
+    cfg.lightdock.scoring_function = str(custom_conf)
+    cfg.validate()
+
+    # Serialization test
+    cfg.lightdock.scoring_function = "combined"
+    cfg.lightdock.scoring_weights = {"cpydock": 0.4, "dfire2": 0.6}
+    d = cfg.to_dict()
+    assert d["lightdock"]["scoring_function"] == "combined"
+    assert d["lightdock"]["scoring_weights"] == {"cpydock": 0.4, "dfire2": 0.6}
+

@@ -540,12 +540,28 @@ class WorkflowEngine:
 
     def _collect_protein_input(self, context: dict, ctx_key: str = "protein_pdb") -> str | None:
         """
-        Interactively collect protein input: allow local path or download from RCSB PDB.
+        Interactively collect protein input: allow local path, RCSB PDB download,
+        or AlphaFold predicted structure fetch.
         """
+        from utils.fetch import extract_uniprot_accession, fetch_alphafold, fetch_pdb
+
+        # Do not silently replace an already selected receptor
+        if ctx_key in context and context[ctx_key]:
+            existing = context[ctx_key]
+            print(f"\nProtein target already specified: {existing}")
+            print("Keep current protein target? [Y/n]: ", end="", flush=True)
+            try:
+                keep_c = input().strip().lower()
+                if keep_c not in ("n", "no"):
+                    return existing
+            except (EOFError, KeyboardInterrupt):
+                return existing
+
         print()
         print("Provide protein target:")
         print("  [1] Enter local PDB file path")
         print("  [2] Download from RCSB PDB by ID (e.g. 7DTD, 4MZI, 6LU7)")
+        print("  [3] Fetch predicted structure from AlphaFold by accession or URL (e.g. Q9KPW0 or https://alphafold.ebi.ac.uk/entry/Q9KPW0)")
         print("Choice [1]: ", end="", flush=True)
         try:
             choice = input().strip()
@@ -553,7 +569,45 @@ class WorkflowEngine:
             print("\nCancelled.")
             return None
 
-        if choice == "2":
+        if choice == "3":
+            while True:
+                print("Enter UniProt accession or AlphaFold URL (e.g. Q9KPW0): ", end="", flush=True)
+                try:
+                    af_query = input().strip()
+                except (EOFError, KeyboardInterrupt):
+                    print("\nCancelled.")
+                    return None
+                if not af_query:
+                    print("  [!] Accession or URL is required.")
+                    continue
+                try:
+                    af_res = fetch_alphafold(af_query)
+                    print(f"\n  ✓ Resolved AlphaFold entry: {af_res['entry_id']} | Gene: {af_res['gene']} | Organism: {af_res['organism']}")
+                    print(f"    Description: {af_res['description']}")
+                    print(f"    Source: {af_res['source']}")
+                    print(f"    Confidence: Mean pLDDT {af_res['mean_plddt']} (Very High: {af_res['plddt_very_high_pct']}%, Confident: {af_res['plddt_confident_pct']}%, Low/Disordered: {af_res['plddt_low_pct'] + af_res['plddt_very_low_pct']}%)")
+                    if af_res.get("low_confidence_warning"):
+                        print("    [!] Notice: >20% of residues have low pLDDT confidence (<70). Check disordered loop regions before docking.")
+                    
+                    print(f"  Downloaded structure to: {af_res['output_path']}")
+                    print("  Select this AlphaFold structure as receptor for docking? [Y/n]: ", end="", flush=True)
+                    try:
+                        confirm = input().strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        confirm = "y"
+                    if confirm in ("n", "no"):
+                        print("  Fetch cancelled. Please choose another protein.")
+                        return self._collect_protein_input(context, ctx_key)
+
+                    context[ctx_key] = af_res["output_path"]
+                    context["alphafold_metadata"] = af_res
+                    return af_res["output_path"]
+                except Exception as e:
+                    print(f"  [!] Failed to fetch AlphaFold model: {e}")
+                    print("      Please check the accession or try another option.")
+                    return self._collect_protein_input(context, ctx_key)
+
+        elif choice == "2":
             while True:
                 print("Enter 4-character RCSB PDB ID: ", end="", flush=True)
                 try:
@@ -565,7 +619,6 @@ class WorkflowEngine:
                     print("  [!] PDB ID is required.")
                     continue
                 try:
-                    from utils.fetch import fetch_pdb
                     dest_file = os.path.join("protein", f"{pdb_id}.pdb")
                     path = fetch_pdb(pdb_id, dest_file)
                     print(f"  ✓ Downloaded PDB structure to: {path}")
@@ -594,7 +647,25 @@ class WorkflowEngine:
 
                 path = os.path.normpath(path)
                 if not os.path.isfile(path):
-                    if len(path) == 4 and path.isalnum():
+                    # Check if query is an AlphaFold accession/URL
+                    af_acc = extract_uniprot_accession(path)
+                    if af_acc and len(path) != 4:
+                        print(f"  Input '{path}' matches UniProt accession '{af_acc}'. Fetch predicted structure from AlphaFold DB? [Y/n]: ", end="", flush=True)
+                        try:
+                            af_choice = input().strip().lower()
+                        except (EOFError, KeyboardInterrupt):
+                            af_choice = "n"
+                        if af_choice not in ("n", "no"):
+                            try:
+                                af_res = fetch_alphafold(af_acc)
+                                print(f"  ✓ Resolved AlphaFold model: {af_res['entry_id']} ({af_res['organism']}) | Mean pLDDT: {af_res['mean_plddt']}")
+                                context[ctx_key] = af_res["output_path"]
+                                context["alphafold_metadata"] = af_res
+                                return af_res["output_path"]
+                            except Exception as dl_err:
+                                print(f"  [!] AlphaFold download failed: {dl_err}")
+
+                    elif len(path) == 4 and path.isalnum():
                         print(f"  Local file '{path}' not found. Download PDB '{path.upper()}' from RCSB? [Y/n]: ", end="", flush=True)
                         try:
                             dl_choice = input().strip().lower()
@@ -602,7 +673,6 @@ class WorkflowEngine:
                             dl_choice = "n"
                         if dl_choice not in ("n", "no"):
                             try:
-                                from utils.fetch import fetch_pdb
                                 dest_file = os.path.join("protein", f"{path.upper()}.pdb")
                                 p = fetch_pdb(path.upper(), dest_file)
                                 print(f"  ✓ Downloaded PDB structure to: {p}")
@@ -1320,25 +1390,57 @@ class WorkflowEngine:
 # ──────────────────────────────────────────────────────────────
 
 def _exec_protein_preparation(ctx: dict, config: DrugLabConfig) -> dict:
-    """Execute protein preparation module."""
-    from core.protein_preparation import prepare_protein
+    """Execute transparent protein preparation module with interactive review."""
+    from core.structure_inspection import inspect_structure_components
+    from core.structure_review_gui import review_structure_preparation
+    from core.receptor_preparation_pipeline import prepare_receptor_transparently
 
     input_pdb = ctx.get("protein_pdb")
     if not input_pdb:
         raise ValueError("protein_pdb not provided in context.")
 
-    return prepare_protein(
+    prep_dir = os.path.join(ctx.get("output_dir", "results"), "protein_preparation")
+    af_meta = ctx.get("alphafold_metadata")
+
+    # Step 1: Structure Inspection
+    insp = inspect_structure_components(
         input_pdb=input_pdb,
-        output_dir=ctx["output_dir"],
-        chain_id=config.protein.chain_id,
-        remove_water=config.protein.remove_water,
-        remove_heterogens=config.protein.remove_heterogens,
-        add_hydrogens=config.protein.add_hydrogens,
-        fix_missing_residues=config.protein.fix_missing_residues,
-        fix_missing_atoms=config.protein.fix_missing_atoms,
-        ph=config.protein.ph,
-        keep_ligands=config.protein.keep_ligands,
+        workflow_mode="small_molecule",
+        alphafold_metadata=af_meta,
     )
+
+    # Step 2: Interactive Review (Web 3Dmol GUI with Terminal Fallback)
+    launch_gui = not ctx.get("no_gui", False)
+    decisions = review_structure_preparation(
+        pdb_path=input_pdb,
+        inspection_data=insp,
+        launch_gui=launch_gui,
+        auto_confirm=not sys.stdin.isatty(),
+    )
+
+    # Step 3: Transparent Preparation Execution
+    result = prepare_receptor_transparently(
+        input_pdb=input_pdb,
+        output_dir=prep_dir,
+        workflow_mode="small_molecule",
+        decisions=decisions,
+        inspection_data=insp,
+        ph=config.protein.ph,
+    )
+
+    # Map paths to context
+    ctx["clean_pdb"] = result["prepared_path"]
+    ctx["protein_clean"] = result["prepared_path"]
+    ctx["protein_pdbqt"] = result["pdbqt_path"]
+    ctx["preparation_report_html"] = result["report_html"]
+    ctx["preparation_report_json"] = result["report_json"]
+    ctx["preparation_report_tsv"] = result["report_tsv"]
+
+    # Provide backward-compatible keys
+    result["clean_pdb"] = result["prepared_path"]
+    result["pdbqt"] = result["pdbqt_path"]
+    result["num_residues"] = result["prepared_residues"]
+    return result
 
 
 def _exec_ligand_preparation(ctx: dict, config: DrugLabConfig) -> dict:

@@ -18,7 +18,7 @@ PRESET_SAMPLING = {
 }
 
 SUPPORTED_SCORING_FUNCTIONS = {
-    "fastdfire", "dfire", "dfire2", "cpydock", "tobi", "sd", "mj3h", "pisa", "vdw"
+    "fastdfire", "dfire", "dfire2", "cpydock", "combined", "tobi", "sd", "mj3h", "pisa", "vdw"
 }
 
 SUPPORTED_BINDING_SITE_MODES = {"auto", "explicit", "pocket_guided", "global"}
@@ -92,6 +92,8 @@ class LightdockConfig:
     executable: str | None = None
     preset: str = "fast"
     scoring_function: str = "fastdfire"
+    scoring_weights: dict[str, float] | None = None
+    custom_scoring_file: str | None = None
     swarms: int | None = None
     glowworms: int = 50
     steps: int | None = None
@@ -141,7 +143,10 @@ class PeptideDockingConfig:
                 f"Invalid LightDock preset '{self.lightdock.preset}'. "
                 f"Must be one of: {list(PRESET_SAMPLING.keys())}"
             )
-        if self.lightdock.scoring_function not in SUPPORTED_SCORING_FUNCTIONS:
+        if (
+            self.lightdock.scoring_function not in SUPPORTED_SCORING_FUNCTIONS
+            and not os.path.isfile(self.lightdock.scoring_function)
+        ):
             raise ValueError(
                 f"Unsupported scoring function '{self.lightdock.scoring_function}'. "
                 f"Supported: {sorted(SUPPORTED_SCORING_FUNCTIONS)}"
@@ -221,6 +226,8 @@ class PeptideDockingConfig:
                 "executable": self.lightdock.executable,
                 "preset": self.lightdock.preset,
                 "scoring_function": self.lightdock.scoring_function,
+                "scoring_weights": self.lightdock.scoring_weights,
+                "custom_scoring_file": self.lightdock.custom_scoring_file,
                 "swarms": self.lightdock.swarms,
                 "glowworms": self.lightdock.glowworms,
                 "steps": self.lightdock.steps,
@@ -362,6 +369,8 @@ def load_peptide_config(
             executable=lgd.get("executable"),
             preset=str(lgd.get("preset", "fast")),
             scoring_function=str(lgd.get("scoring_function", "fastdfire")),
+            scoring_weights=lgd.get("scoring_weights"),
+            custom_scoring_file=lgd.get("custom_scoring_file"),
             swarms=lgd.get("swarms"),
             glowworms=int(lgd.get("glowworms", 50)),
             steps=lgd.get("steps"),

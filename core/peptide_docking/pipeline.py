@@ -105,34 +105,55 @@ def run_peptide_docking_pipeline(
     if not prot_target:
         raise ValueError("No protein receptor target specified in arguments or configuration.")
 
+    af_meta = None
+    # Check if target is a UniProt accession or AlphaFold URL
+    from utils.fetch import extract_uniprot_accession, fetch_alphafold, fetch_pdb
+    af_acc = extract_uniprot_accession(prot_target)
+    if not os.path.isfile(prot_target) and af_acc and len(prot_target.strip()) != 4:
+        logger.info(f"Target '{prot_target}' resolved as UniProt accession '{af_acc}'. Fetching from AlphaFold DB...")
+        af_res = fetch_alphafold(af_acc, str(run_dir / f"AF_{af_acc}.pdb"))
+        prot_target = af_res["output_path"]
+        af_meta = af_res
     # Check if target is a 4-letter PDB ID
-    if not os.path.isfile(prot_target) and len(prot_target.strip()) == 4 and prot_target.strip().isalnum():
+    elif not os.path.isfile(prot_target) and len(prot_target.strip()) == 4 and prot_target.strip().isalnum():
         logger.info(f"Target '{prot_target}' appears to be a PDB ID. Fetching from RCSB PDB...")
-        from utils.fetch import fetch_pdb
         prot_target = fetch_pdb(prot_target.strip().upper(), str(run_dir / f"{prot_target.strip().upper()}.pdb"))
 
     prot_path = Path(prot_target).resolve()
     if not prot_path.is_file():
         raise FileNotFoundError(f"Receptor PDB structure not found: {prot_target}")
 
-    # 4. Protein Preparation
+    # 4. Transparent Protein Preparation
     prep_prot_dir = run_dir / "prepared_proteins"
-    inspect_res = inspect_protein_structure(prot_path)
+    from core.structure_inspection import inspect_structure_components
+    from core.receptor_preparation_pipeline import prepare_receptor_transparently
+
+    inspect_res = inspect_structure_components(
+        input_pdb=prot_path,
+        workflow_mode="peptide",
+        alphafold_metadata=af_meta,
+    )
     logger.info(
-        f"Receptor inspection: chains={inspect_res.get('chains')}, residues={inspect_res.get('num_residues')}, "
-        f"waters={inspect_res.get('num_waters')}, metals={inspect_res.get('metals')}, cofactors={inspect_res.get('cofactors')}"
+        f"Receptor inspection: chains={inspect_res.get('chain_ids')}, residues={inspect_res.get('total_residues')}, "
+        f"waters={inspect_res.get('waters_count')}, metals={inspect_res.get('metals')}, cofactors={inspect_res.get('cofactors')}"
     )
 
-    prep_prot_result = prepare_receptor_for_lightdock(
+    decisions = {
+        "selected_chains": cfg.protein.chains or inspect_res.get("chain_ids", []),
+        "water_policy": getattr(cfg.protein, "water_policy", "remove_bulk"),
+        "keep_metals": getattr(cfg.protein, "keep_metals", False),
+        "keep_cofactors": getattr(cfg.protein, "keep_cofactors", False),
+        "resolve_altlocs": True,
+        "standardize_nonstandard": True,
+    }
+
+    prep_prot_result = prepare_receptor_transparently(
         input_pdb=prot_path,
         output_dir=prep_prot_dir,
-        chains=cfg.protein.chains,
-        water_policy=getattr(cfg.protein, "water_policy", "remove_bulk"),
-        keep_metals=getattr(cfg.protein, "keep_metals", True),
-        keep_cofactors=getattr(cfg.protein, "keep_cofactors", True),
-        keep_heteroatoms=getattr(cfg.protein, "keep_heteroatoms", True),
-        remove_hydrogens=cfg.protein.remove_hydrogens,
-        biological_assembly=getattr(cfg.protein, "biological_assembly", None),
+        workflow_mode="peptide",
+        decisions=decisions,
+        inspection_data=inspect_res,
+        ph=getattr(cfg.protein, "ph", 7.4),
     )
     prepared_receptor_pdb = prep_prot_result["prepared_path"]
 

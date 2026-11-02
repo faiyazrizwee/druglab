@@ -286,6 +286,50 @@ def prepare_protein(
         metrics["status"] = "completed"
         metrics["duration"] = round(duration, 2)
         write_json(metrics, report_path)
+
+        html_report_path = os.path.join(prep_dir, "preparation_report.html")
+        tsv_report_path = os.path.join(prep_dir, "preparation_report.tsv")
+        metrics["report_html"] = html_report_path
+        metrics["report_json"] = report_path
+        metrics["report_tsv"] = tsv_report_path
+
+        try:
+            from core.receptor_preparation_pipeline import generate_html_preparation_report
+            from core.structure_inspection import inspect_structure_components
+            insp = inspect_structure_components(input_pdb, workflow_mode="small_molecule")
+            report_payload = {
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+                "receptor_name": Path(input_pdb).name,
+                "workflow_mode": "small_molecule",
+                "is_alphafold": insp.get("is_alphafold", False),
+                "structure_source": insp.get("structure_source", "Experimental PDB"),
+                "alphafold_caveats": insp.get("alphafold_caveats"),
+                "original_path": str(Path(input_pdb).resolve()),
+                "prepared_path": clean_pdb_path,
+                "pdbqt_path": pdbqt_path,
+                "original_residues": insp.get("total_residues", 0),
+                "prepared_residues": metrics["num_residues"],
+                "original_atoms": insp.get("total_atoms", 0),
+                "prepared_atoms": metrics.get("num_residues", 0) * 15,
+                "chains_selected": metrics["chains"],
+                "decisions_log": [
+                    {
+                        "component": it["title"],
+                        "action": "remove" if ("water" in it["component_type"] and remove_water) or ("ligand" in it["component_type"] and remove_heterogens) else "keep",
+                        "scientific_rationale": it["scientific_rationale"],
+                        "docking_consequences": it["docking_consequences"],
+                    }
+                    for it in insp.get("review_items", [])
+                ],
+            }
+            generate_html_preparation_report(report_payload, html_report_path)
+            with open(tsv_report_path, "w", encoding="utf-8") as f_tsv:
+                f_tsv.write("Component\tAction\tScientific_Rationale\tDocking_Impact\n")
+                for d in report_payload["decisions_log"]:
+                    f_tsv.write(f"{d['component']}\t{d['action']}\t{d['scientific_rationale']}\t{d['docking_consequences']}\n")
+        except Exception as rep_err:
+            logger.debug(f"Could not write enhanced HTML/TSV report: {rep_err}")
+
         log_step(logger, "Protein Preparation", "completed", {
             "clean_pdb": clean_pdb_path,
             "pdbqt": pdbqt_path,

@@ -154,6 +154,32 @@ def _prompt_terminal_chemistry():
     return "zwitterion", "zwitterion", False
 
 
+def _prompt_scoring_function(default: str = "fastdfire") -> str:
+    """Prompt user for LightDock scoring function selection, defaulting to fastdfire."""
+    print("\nSelect LightDock scoring function:")
+    print("  [1] fastdfire (Fast atomic distance-dependent statistical potential) [default]")
+    print("  [2] dfire2 (Refined all-atom distance-dependent potential)")
+    print("  [3] cpydock (Intermolecular electrostatics and desolvation)")
+    print("  [4] combined (Combined scoring: cpydock + dfire2 with proportional weights)")
+    try:
+        schoice = input("Choice [1]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return default
+
+    s_map = {
+        "1": "fastdfire",
+        "fastdfire": "fastdfire",
+        "": default,
+        "2": "dfire2",
+        "dfire2": "dfire2",
+        "3": "cpydock",
+        "cpydock": "cpydock",
+        "4": "combined",
+        "combined": "combined",
+    }
+    return s_map.get(schoice.lower(), default)
+
+
 def _run_peptide_interactive():
     """Launch the dedicated Protein–Peptide Docking interactive submenu mirroring Small-Molecule workflow."""
     from rich.console import Console
@@ -190,7 +216,7 @@ def _run_peptide_interactive():
         table.add_row("[2]", "Module", "Peptide (Ligand) Prep", "Sequence/PDB, zwitterion/caps, cyclization, S-S bonds, 3D conformers")
         table.add_row("[3]", "Module", "Pocket Detection", "Cavity detection & interactive 3D box tuner GUI → LightDock restraints")
         table.add_row("[4]", "Module", "ADMET & Safety Profile", "Physicochemical descriptors, Caco-2/PAMPA/RRCK/BBB permeability, hemolytic risk")
-        table.add_row("[5]", "Module", "LightDock Docking", "Glowworm Swarm Optimization with DFIRE potentials and restraints")
+        table.add_row("[5]", "Module", "LightDock Docking", "GSO engine (fastdfire, dfire2, cpydock, combined) and restraints")
         table.add_row("[6]", "Module", "Lead Selection & Triage", "Multi-objective ranking (Score, contacts, H-bonds, clashes, toxicity)")
         table.add_section()
 
@@ -221,7 +247,7 @@ def _run_peptide_interactive():
                 output_dir = "results"
                 config = None
                 preset = "fast"
-                scoring = "fastdfire"
+                scoring = None
                 binding_mode = None
                 restraints = None
                 admet_provider = None
@@ -256,20 +282,44 @@ def _run_peptide_interactive():
 
 
 def _interactive_peptide_protein_prep():
-    """Interactive handler for Module 1: Protein Preparation."""
-    from core.peptide_docking.protein_preparation import inspect_protein_structure, prepare_receptor_for_lightdock
-    from utils.fetch import fetch_pdb
+    """Interactive handler for Module 1: Protein Preparation with AlphaFold fetch and transparent review."""
+    from core.structure_inspection import inspect_structure_components
+    from core.structure_review_gui import review_structure_preparation
+    from core.receptor_preparation_pipeline import prepare_receptor_transparently
+    from utils.fetch import fetch_pdb, fetch_alphafold, extract_uniprot_accession
 
     print("\n--- Module 1: Receptor Protein Preparation ---")
     print("Provide receptor protein target:")
     print("  [1] Enter local PDB file path")
     print("  [2] Download from RCSB PDB by ID (e.g. 7DTD, 1SSH, 6LU7)")
+    print("  [3] Fetch predicted structure from AlphaFold by accession or URL (e.g. Q9KPW0 or https://alphafold.ebi.ac.uk/entry/Q9KPW0)")
     try:
         choice = input("Choice [1]: ").strip()
     except (EOFError, KeyboardInterrupt):
         return
 
-    if choice == "2":
+    af_meta = None
+    if choice == "3":
+        try:
+            af_query = input("Enter UniProt accession or AlphaFold URL: ").strip()
+            af_res = fetch_alphafold(af_query)
+            print(f"\n✓ Resolved AlphaFold model: {af_res['entry_id']} | Gene: {af_res['gene']} | Organism: {af_res['organism']}")
+            print(f"  Description: {af_res['description']}")
+            print(f"  Source: {af_res['source']}")
+            print(f"  Confidence: Mean pLDDT {af_res['mean_plddt']} ({af_res['plddt_very_high_pct']}% very high confidence)")
+            if af_res.get("low_confidence_warning"):
+                print("  [!] Notice: Model contains disordered regions with low pLDDT (<70).")
+            print(f"  Downloaded structure to: {af_res['output_path']}")
+            confirm = input("Select this AlphaFold structure as receptor for docking? [Y/n]: ").strip().lower()
+            if confirm in ("n", "no"):
+                print("Fetch cancelled.")
+                return
+            protein = af_res["output_path"]
+            af_meta = af_res
+        except Exception as e:
+            print(f"Failed to fetch AlphaFold structure: {e}")
+            return
+    elif choice == "2":
         try:
             pdb_id = input("Enter 4-character RCSB PDB ID: ").strip().upper()
             protein = fetch_pdb(pdb_id, os.path.join("protein", f"{pdb_id}.pdb"))
@@ -283,55 +333,60 @@ def _interactive_peptide_protein_prep():
         except (EOFError, KeyboardInterrupt):
             return
 
+        if not os.path.isfile(protein):
+            af_acc = extract_uniprot_accession(protein)
+            if af_acc and len(protein) != 4:
+                print(f"Input '{protein}' matches UniProt accession '{af_acc}'. Fetch from AlphaFold DB? [Y/n]: ", end="", flush=True)
+                try:
+                    c = input().strip().lower()
+                    if c not in ("n", "no"):
+                        af_res = fetch_alphafold(af_acc)
+                        protein = af_res["output_path"]
+                        af_meta = af_res
+                except Exception as e:
+                    print(f"AlphaFold fetch failed: {e}")
+            elif len(protein) == 4 and protein.isalnum():
+                try:
+                    protein = fetch_pdb(protein.strip().upper(), os.path.join("protein", f"{protein.strip().upper()}.pdb"))
+                except Exception as e:
+                    print(f"RCSB fetch failed: {e}")
+
     if not os.path.isfile(protein):
         print(f"Error: Protein file not found: {protein}")
         return
 
     print(f"\n[1/3] Inspecting receptor structure: {protein}...")
-    insp = inspect_protein_structure(protein)
-    print(f"  • Chains detected: {', '.join(insp.get('chains', []))}")
-    print(f"  • Total residues: {insp.get('num_residues', 0)}")
-    print(f"  • Crystallographic waters: {insp.get('num_waters', 0)}")
+    insp = inspect_structure_components(protein, workflow_mode="peptide", alphafold_metadata=af_meta)
+    print(f"  • Chains detected: {', '.join(insp.get('chain_ids', []))}")
+    print(f"  • Total residues: {insp.get('total_residues', 0)}")
+    print(f"  • Crystallographic waters: {insp.get('waters_count', 0)}")
     print(f"  • Metals: {', '.join(insp.get('metals', [])) if insp.get('metals') else 'None'}")
     print(f"  • Cofactors: {', '.join(insp.get('cofactors', [])) if insp.get('cofactors') else 'None'}")
-    if insp.get("missing_residues"):
-        print(f"  • Missing residues: {len(insp['missing_residues'])} (REMARK 465)")
-    if insp.get("alternate_conformations"):
-        print(f"  • Alternate conformations: {len(insp['alternate_conformations'])} residues (resolved to highest occupancy)")
 
-    # Water policy selection
-    print("\n[2/3] Select water policy:")
-    print("  [1] Remove bulk waters, retain interfacial waters within 4.5Å of binding surface [default]")
-    print("  [2] Retain all crystallographic waters")
-    print("  [3] Remove all waters")
-    try:
-        w_choice = input("Choice [1]: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        return
-
-    w_map = {"1": "remove_bulk", "": "remove_bulk", "2": "keep_all", "3": "remove_all"}
-    water_policy = w_map.get(w_choice, "remove_bulk")
-
-    # Chain selection
-    try:
-        c_input = input(f"\nEnter chains to keep (comma-separated, or press Enter for all [{','.join(insp.get('chains', []))}])): ").strip()
-        chains = [c.strip() for c in c_input.split(",") if c.strip()] if c_input else None
-    except (EOFError, KeyboardInterrupt):
-        return
+    # Launch interactive 3D review
+    print("\n[2/3] Reviewing structural components & preparation proposals...")
+    decisions = review_structure_preparation(
+        pdb_path=protein,
+        inspection_data=insp,
+        launch_gui=True,
+        auto_confirm=not sys.stdin.isatty(),
+    )
 
     out_dir = "results/prepared_proteins"
     print(f"\n[3/3] Preparing LightDock-compatible receptor in {out_dir}...")
-    res = prepare_receptor_for_lightdock(
+    res = prepare_receptor_transparently(
         input_pdb=protein,
         output_dir=out_dir,
-        chains=chains,
-        water_policy=water_policy,
-        keep_metals=True,
-        keep_cofactors=True,
+        workflow_mode="peptide",
+        decisions=decisions,
+        inspection_data=insp,
     )
     print(f"✓ Receptor preparation complete!")
+    print(f"  Original PDB (unchanged): {res['original_path']}")
     print(f"  Prepared PDB: {res['prepared_path']}")
-    print(f"  Chains retained: {res['chains']}")
+    print(f"  Audit Report HTML: {res['report_html']}")
+    print(f"  Audit Report JSON: {res['report_json']}")
+    print(f"  Audit Report TSV:  {res['report_tsv']}")
 
 
 def _interactive_peptide_ligand_prep():
@@ -512,7 +567,9 @@ def _interactive_peptide_docking():
     preset_map = {"1": "fast", "": "fast", "2": "balanced", "3": "thorough"}
     preset = preset_map.get(pchoice, "fast")
 
-    cfg = LightdockConfig(preset=preset)
+    scoring = _prompt_scoring_function()
+
+    cfg = LightdockConfig(preset=preset, scoring_function=scoring)
     out_dir = "results/docking"
     res = run_lightdock_docking(
         candidate_id="peptide_cand",
@@ -649,6 +706,8 @@ def _add_run_subcommand(subparsers):
         help="Docking pipeline mode: small-molecule (default) or peptide",
     )
     run_parser.add_argument("--protein", default=None, help="Input protein PDB file or 4-letter PDB ID (e.g. 7DTD)")
+    run_parser.add_argument("--alphafold", "--uniprot", default=None, help="Fetch predicted protein structure from AlphaFold DB by accession or URL (e.g. Q9KPW0)")
+    run_parser.add_argument("--no-gui", action="store_true", help="Disable 3Dmol browser GUI and use terminal review")
     run_parser.add_argument("--library", default=None, help="Ligand library (SDF, directory, or compound name)")
     run_parser.add_argument("--output-dir", default="results", help="Output directory")
     run_parser.add_argument("--config", default=None, help="Path to YAML config file")
@@ -662,7 +721,12 @@ def _add_run_subcommand(subparsers):
     run_parser.add_argument("--peptide-seq", default=None, help="Peptide amino-acid sequence (peptide mode)")
     run_parser.add_argument("--peptide-structure", default=None, help="Peptide PDB structure (peptide mode)")
     run_parser.add_argument("--preset", default="fast", choices=["fast", "balanced", "thorough"], help="Sampling preset (peptide mode)")
-    run_parser.add_argument("--scoring", default="fastdfire", help="Scoring function (peptide mode)")
+    run_parser.add_argument(
+        "--scoring",
+        default=None,
+        choices=["fastdfire", "dfire2", "cpydock", "combined"],
+        help="Scoring function (peptide mode): fastdfire, dfire2, cpydock, combined",
+    )
     run_parser.add_argument("--binding-mode", default="auto", choices=["auto", "explicit", "pocket_guided", "global"], help="Binding-site mode (peptide mode)")
     run_parser.add_argument("--restraints", nargs="+", default=None, help="Receptor residue restraints (e.g. A.TYR.45)")
     run_parser.add_argument(
@@ -684,27 +748,61 @@ def _handle_run(args):
     from utils.logger import print_banner
     from utils.config import load_config
     from drug_selection.workflow import run_drug_selection
+    from utils.fetch import extract_uniprot_accession, fetch_alphafold, fetch_pdb
 
     print_banner()
 
-    protein = args.protein
+    protein = getattr(args, "protein", None)
+    af_arg = getattr(args, "alphafold", None)
     library = args.library
+    af_meta = None
+
+    if af_arg:
+        try:
+            af_res = fetch_alphafold(af_arg)
+            protein = af_res["output_path"]
+            af_meta = af_res
+            print(f"\n✓ Resolved AlphaFold model: {af_res['entry_id']} | Gene: {af_res['gene']} | Organism: {af_res['organism']}")
+            print(f"  Confidence: Mean pLDDT {af_res['mean_plddt']} ({af_res['plddt_very_high_pct']}% very high)")
+            if af_res.get("low_confidence_warning"):
+                print("  [!] Notice: Model has disordered loop regions (pLDDT < 70).")
+        except Exception as e:
+            print(f"Error fetching AlphaFold accession '{af_arg}': {e}")
+            return
 
     # 1. Interactive prompt if protein is not provided
     if not protein:
         print("\nProvide protein target:")
         print("  [1] Enter local PDB file path")
         print("  [2] Download from RCSB PDB by ID (e.g. 7DTD, 4MZI, 6LU7)")
+        print("  [3] Fetch predicted structure from AlphaFold by accession or URL (e.g. Q9KPW0 or https://alphafold.ebi.ac.uk/entry/Q9KPW0)")
         try:
             choice = input("Choice [1]: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nCancelled.")
             return
 
-        if choice == "2":
+        if choice == "3":
+            try:
+                af_query = input("Enter UniProt accession or AlphaFold URL: ").strip()
+                af_res = fetch_alphafold(af_query)
+                print(f"\n✓ Resolved AlphaFold model: {af_res['entry_id']} | Gene: {af_res['gene']} | Organism: {af_res['organism']}")
+                print(f"  Description: {af_res['description']}")
+                print(f"  Confidence: Mean pLDDT {af_res['mean_plddt']} ({af_res['plddt_very_high_pct']}% very high confidence)")
+                if af_res.get("low_confidence_warning"):
+                    print("  [!] Notice: Structure contains disordered regions (pLDDT < 70).")
+                confirm = input("Select this AlphaFold structure as receptor for docking? [Y/n]: ").strip().lower()
+                if confirm in ("n", "no"):
+                    print("Fetch cancelled.")
+                    return
+                protein = af_res["output_path"]
+                af_meta = af_res
+            except Exception as e:
+                print(f"Failed to fetch AlphaFold model: {e}")
+                return
+        elif choice == "2":
             try:
                 pdb_id = input("Enter 4-character RCSB PDB ID: ").strip().upper()
-                from utils.fetch import fetch_pdb
                 protein = fetch_pdb(pdb_id, os.path.join("protein", f"{pdb_id}.pdb"))
             except (EOFError, KeyboardInterrupt):
                 print("\nCancelled.")
@@ -718,14 +816,26 @@ def _handle_run(args):
                 print("\nCancelled.")
                 return
 
-    # Auto-fetch if 4-character PDB ID passed directly
-    if protein and not os.path.isfile(protein) and len(protein.strip()) == 4 and protein.strip().isalnum():
-        print(f"Target '{protein}' appears to be a PDB ID. Fetching from RCSB PDB...")
-        from utils.fetch import fetch_pdb
-        try:
-            protein = fetch_pdb(protein.strip().upper(), os.path.join("protein", f"{protein.strip().upper()}.pdb"))
-        except Exception as e:
-            print(f"Failed to fetch PDB {protein}: {e}")
+    # Auto-detection if not a local file
+    if protein and not os.path.isfile(protein):
+        af_acc = extract_uniprot_accession(protein)
+        if af_acc and len(protein.strip()) != 4:
+            print(f"Target '{protein}' matches UniProt accession '{af_acc}'. Fetching from AlphaFold DB...")
+            try:
+                af_res = fetch_alphafold(af_acc)
+                protein = af_res["output_path"]
+                af_meta = af_res
+                print(f"✓ Downloaded AlphaFold structure to: {protein} (Mean pLDDT: {af_res['mean_plddt']})")
+            except Exception as e:
+                print(f"Failed to fetch AlphaFold structure: {e}")
+                return
+        elif len(protein.strip()) == 4 and protein.strip().isalnum():
+            print(f"Target '{protein}' appears to be a PDB ID. Fetching from RCSB PDB...")
+            try:
+                protein = fetch_pdb(protein.strip().upper(), os.path.join("protein", f"{protein.strip().upper()}.pdb"))
+            except Exception as e:
+                print(f"Failed to fetch PDB {protein}: {e}")
+                return
 
     # 2. Interactive prompt if library is not provided
     if not library:
@@ -805,21 +915,60 @@ def _handle_run_peptide(args):
 
     cfg = load_peptide_config(config_path=getattr(args, "config", None), overrides=overrides)
 
-    protein = getattr(args, "protein", None) or cfg.protein.input
+    from utils.fetch import extract_uniprot_accession, fetch_alphafold, fetch_pdb
+
+    af_arg = getattr(args, "alphafold", None)
+    af_meta = None
+    protein = None
+
+    if af_arg:
+        try:
+            af_res = fetch_alphafold(af_arg)
+            protein = af_res["output_path"]
+            af_meta = af_res
+            print(f"\n✓ Resolved AlphaFold predicted model: {af_res['entry_id']} | Gene: {af_res['gene']} | Organism: {af_res['organism']}")
+            print(f"  Confidence: Mean pLDDT {af_res['mean_plddt']} ({af_res['plddt_very_high_pct']}% very high)")
+            if af_res.get("low_confidence_warning"):
+                print("  [!] Notice: Model has low confidence loop regions (pLDDT < 70).")
+        except Exception as e:
+            print(f"Error fetching AlphaFold accession '{af_arg}': {e}")
+            return
+    else:
+        protein = getattr(args, "protein", None) or cfg.protein.input
+
     if not protein:
         print("\nProvide receptor protein target:")
         print("  [1] Enter local PDB file path")
         print("  [2] Download from RCSB PDB by ID (e.g. 7DTD, 1SSH, 6LU7)")
+        print("  [3] Fetch predicted structure from AlphaFold by accession or URL (e.g. Q9KPW0 or https://alphafold.ebi.ac.uk/entry/Q9KPW0)")
         try:
             choice = input("Choice [1]: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nCancelled.")
             return
 
-        if choice == "2":
+        if choice == "3":
+            try:
+                af_query = input("Enter UniProt accession or AlphaFold URL: ").strip()
+                af_res = fetch_alphafold(af_query)
+                print(f"\n✓ Resolved AlphaFold model: {af_res['entry_id']} | Gene: {af_res['gene']} | Organism: {af_res['organism']}")
+                print(f"  Description: {af_res['description']}")
+                print(f"  Source: {af_res['source']}")
+                print(f"  Confidence: Mean pLDDT {af_res['mean_plddt']} ({af_res['plddt_very_high_pct']}% very high confidence)")
+                if af_res.get("low_confidence_warning"):
+                    print("  [!] Notice: Structure contains disordered regions (pLDDT < 70).")
+                confirm = input("Select this AlphaFold structure as receptor for docking? [Y/n]: ").strip().lower()
+                if confirm in ("n", "no"):
+                    print("Fetch cancelled.")
+                    return
+                protein = af_res["output_path"]
+                af_meta = af_res
+            except Exception as e:
+                print(f"Failed to fetch AlphaFold model: {e}")
+                return
+        elif choice == "2":
             try:
                 pdb_id = input("Enter 4-character RCSB PDB ID: ").strip().upper()
-                from utils.fetch import fetch_pdb
                 protein = fetch_pdb(pdb_id, os.path.join("protein", f"{pdb_id}.pdb"))
             except (EOFError, KeyboardInterrupt):
                 print("\nCancelled.")
@@ -832,6 +981,61 @@ def _handle_run_peptide(args):
             except (EOFError, KeyboardInterrupt):
                 print("\nCancelled.")
                 return
+
+    # Auto-detection if path is not a local file
+    if protein and not os.path.isfile(protein):
+        af_acc = extract_uniprot_accession(protein)
+        if af_acc and len(protein.strip()) != 4:
+            print(f"Target '{protein}' matches UniProt accession '{af_acc}'. Fetching from AlphaFold DB...")
+            try:
+                af_res = fetch_alphafold(af_acc)
+                protein = af_res["output_path"]
+                af_meta = af_res
+                print(f"✓ Downloaded AlphaFold structure to: {protein} (Mean pLDDT: {af_res['mean_plddt']})")
+            except Exception as e:
+                print(f"Failed to fetch AlphaFold structure: {e}")
+                return
+        elif len(protein.strip()) == 4 and protein.strip().isalnum():
+            print(f"Target '{protein}' appears to be a PDB ID. Fetching from RCSB PDB...")
+            try:
+                protein = fetch_pdb(protein.strip().upper(), os.path.join("protein", f"{protein.strip().upper()}.pdb"))
+            except Exception as e:
+                print(f"Failed to fetch PDB {protein}: {e}")
+                return
+
+    if not protein or not os.path.isfile(protein):
+        print(f"Error: Receptor protein structure not found: {protein}")
+        return
+
+    orig_protein = protein
+
+    # Transparent structure inspection & review step before docking
+    from core.structure_inspection import inspect_structure_components
+    from core.structure_review_gui import review_structure_preparation
+    from core.receptor_preparation_pipeline import prepare_receptor_transparently
+
+    print(f"\n[Structure Inspection] Analyzing receptor components: {protein}...")
+    insp = inspect_structure_components(protein, workflow_mode="peptide", alphafold_metadata=af_meta)
+
+    launch_gui = not getattr(args, "no_gui", False)
+    decisions = review_structure_preparation(
+        pdb_path=protein,
+        inspection_data=insp,
+        launch_gui=launch_gui,
+        auto_confirm=not sys.stdin.isatty(),
+    )
+
+    out_prep_dir = os.path.join(getattr(args, "output_dir", "results"), "prepared_proteins")
+    prep_res = prepare_receptor_transparently(
+        input_pdb=protein,
+        output_dir=out_prep_dir,
+        workflow_mode="peptide",
+        decisions=decisions,
+        inspection_data=insp,
+    )
+    # Use prepared structure for downstream cavity detection
+    prepared_protein = prep_res["prepared_path"]
+    cfg.protein.input = orig_protein
 
     fasta = getattr(args, "peptide_fasta", None) or cfg.peptide.fasta
     seq = getattr(args, "peptide_seq", None) or cfg.peptide.sequence
@@ -942,10 +1146,30 @@ def _handle_run_peptide(args):
                 print("\nCancelled.")
                 return
         else:
-            cfg.binding_site.mode = "pocket_gui"
+            from core.peptide_docking.pocket_detection import interactive_peptide_pocket_detection
+            print("\nLaunching Cavity Detection & 3D Box Tuner GUI...")
+            pocket_out_dir = os.path.join(getattr(args, "output_dir", "results"), "pocket_detection")
+            pocket_res = interactive_peptide_pocket_detection(
+                receptor_pdb=prepared_protein,
+                output_dir=pocket_out_dir,
+                launch_gui=True,
+                auto_confirm=False,
+            )
+            restr_list = pocket_res.get("restraints") or pocket_res.get("restraint_lines") or []
+            if restr_list:
+                cfg.binding_site.receptor_residues = restr_list
+                cfg.binding_site.mode = "explicit"
+                cfg.binding_site.restraints_enabled = True
+                print(f"✓ Converted box residues to {len(restr_list)} LightDock restraint(s).")
+            else:
+                cfg.binding_site.mode = "pocket_gui"
+
+    # Scoring function selection prompt
+    if sys.stdin.isatty() and getattr(args, "scoring", None) is None:
+        cfg.lightdock.scoring_function = _prompt_scoring_function()
 
     res = run_peptide_docking_pipeline(
-        protein_input=protein,
+        protein_input=orig_protein,
         peptide_fasta=fasta,
         peptide_sequence=seq,
         peptide_structure=struct,
@@ -1254,6 +1478,12 @@ def _add_fetch_subcommand(subparsers):
     pdb_parser.add_argument("--output", default=None, help="Destination file path")
     pdb_parser.set_defaults(handler=_handle_fetch_pdb)
 
+    # fetch alphafold
+    af_parser = fetch_sub.add_parser("alphafold", aliases=["af", "uniprot"], help="Fetch predicted PDB structure from AlphaFold DB")
+    af_parser.add_argument("accession", help="UniProt accession or AlphaFold URL (e.g. Q9KPW0 or https://alphafold.ebi.ac.uk/entry/Q9KPW0)")
+    af_parser.add_argument("--output", default=None, help="Destination file path")
+    af_parser.set_defaults(handler=_handle_fetch_alphafold)
+
     # fetch ligand
     lig_parser = fetch_sub.add_parser("ligand", help="Fetch ligand SDF by name from PubChem")
     lig_parser.add_argument("name", help="Compound name (e.g. apigenin, quercetin)")
@@ -1271,6 +1501,17 @@ def _handle_fetch_pdb(args):
     from utils.fetch import fetch_pdb
     out = fetch_pdb(pdb_id=args.id, output_path=args.output)
     print(f"Downloaded PDB structure to: {out}")
+
+
+def _handle_fetch_alphafold(args):
+    from utils.fetch import fetch_alphafold
+    res = fetch_alphafold(args.accession, output_path=args.output)
+    print(f"\n✓ Downloaded AlphaFold predicted structure to: {res['output_path']}")
+    print(f"  Entry ID: {res['entry_id']} | Gene: {res['gene']} | Organism: {res['organism']}")
+    print(f"  Description: {res['description']}")
+    print(f"  Confidence: Mean pLDDT {res['mean_plddt']} ({res['plddt_very_high_pct']}% very high confidence)")
+    if res.get("low_confidence_warning"):
+        print("  [!] Notice: Model contains disordered regions with low pLDDT (<70).")
 
 
 def _handle_fetch_ligand(args):
@@ -1294,13 +1535,20 @@ def _add_peptide_subcommand(subparsers):
     # peptide run
     pep_run = pep_sub.add_parser("run", help="Run full protein–peptide docking pipeline")
     pep_run.add_argument("--protein", default=None, help="Input protein PDB file or 4-letter PDB ID")
+    pep_run.add_argument("--alphafold", "--uniprot", default=None, help="UniProt accession or AlphaFold URL to fetch and dock")
+    pep_run.add_argument("--no-gui", action="store_true", help="Disable 3Dmol browser GUI and use terminal review")
     pep_run.add_argument("--fasta", default=None, help="Peptide FASTA file")
     pep_run.add_argument("--sequence", default=None, help="Peptide sequence (e.g. ACDEF)")
     pep_run.add_argument("--structure", default=None, help="Pre-existing peptide PDB structure")
     pep_run.add_argument("--output-dir", default="results", help="Output directory")
     pep_run.add_argument("--config", default=None, help="Path to peptide YAML config")
     pep_run.add_argument("--preset", default="fast", choices=["fast", "balanced", "thorough"], help="Sampling preset")
-    pep_run.add_argument("--scoring", default="fastdfire", help="Scoring function")
+    pep_run.add_argument(
+        "--scoring",
+        default=None,
+        choices=["fastdfire", "dfire2", "cpydock", "combined"],
+        help="Scoring function: fastdfire, dfire2, cpydock, combined",
+    )
     pep_run.add_argument("--binding-mode", default="auto", choices=["auto", "explicit", "pocket_guided", "pocket_gui", "global"])
     pep_run.add_argument("--restraints", nargs="+", default=None, help="Receptor residue restraints")
     pep_run.add_argument(
@@ -1359,7 +1607,12 @@ def _add_peptide_subcommand(subparsers):
     pep_dock.add_argument("--peptide", required=True, help="Prepared peptide PDB")
     pep_dock.add_argument("--restraints", default=None, help="Path to restraints.list file")
     pep_dock.add_argument("--preset", default="fast", choices=["fast", "balanced", "thorough"], help="Sampling preset")
-    pep_dock.add_argument("--scoring", default="fastdfire", help="Scoring function")
+    pep_dock.add_argument(
+        "--scoring",
+        default="fastdfire",
+        choices=["fastdfire", "dfire2", "cpydock", "combined"],
+        help="Scoring function: fastdfire, dfire2, cpydock, combined",
+    )
     pep_dock.add_argument("--output-dir", default="results/docking", help="Output directory")
     pep_dock.set_defaults(handler=_handle_peptide_dock)
 
@@ -1382,6 +1635,8 @@ def _handle_peptide_run(args):
     class PeptideRunArgs:
         mode = "peptide"
         protein = args.protein
+        alphafold = getattr(args, "alphafold", None)
+        no_gui = getattr(args, "no_gui", False)
         peptide_fasta = args.fasta
         peptide_seq = args.sequence
         peptide_structure = args.structure
@@ -1400,42 +1655,56 @@ def _handle_peptide_run(args):
 
 
 def _handle_peptide_protein_prepare(args):
-    from core.peptide_docking.protein_preparation import inspect_protein_structure, prepare_receptor_for_lightdock
-    from utils.fetch import fetch_pdb
+    from core.structure_inspection import inspect_structure_components
+    from core.structure_review_gui import review_structure_preparation
+    from core.receptor_preparation_pipeline import prepare_receptor_transparently
+    from utils.fetch import fetch_pdb, fetch_alphafold, extract_uniprot_accession
 
     prot = args.protein
-    if not os.path.isfile(prot) and len(prot.strip()) == 4 and prot.strip().isalnum():
-        print(f"Target '{prot}' appears to be a PDB ID. Fetching from RCSB PDB...")
-        prot = fetch_pdb(prot.strip().upper(), os.path.join(args.output_dir, f"{prot.strip().upper()}.pdb"))
+    af_meta = None
+
+    if not os.path.isfile(prot):
+        af_acc = extract_uniprot_accession(prot)
+        if af_acc and len(prot.strip()) != 4:
+            print(f"Target '{prot}' resolved as UniProt accession '{af_acc}'. Fetching from AlphaFold DB...")
+            af_res = fetch_alphafold(af_acc, os.path.join(args.output_dir, f"AF_{af_acc}.pdb"))
+            prot = af_res["output_path"]
+            af_meta = af_res
+        elif len(prot.strip()) == 4 and prot.strip().isalnum():
+            print(f"Target '{prot}' appears to be a PDB ID. Fetching from RCSB PDB...")
+            prot = fetch_pdb(prot.strip().upper(), os.path.join(args.output_dir, f"{prot.strip().upper()}.pdb"))
 
     if not os.path.isfile(prot):
         print(f"Error: Protein file not found: {prot}")
         return
 
     print(f"\n--- Inspecting Receptor Structure: {prot} ---")
-    insp = inspect_protein_structure(prot)
-    chains_list = insp.get('available_chain_ids', [c['chain_id'] for c in insp.get('chains', []) if isinstance(c, dict)])
-    print(f"  • Chains: {', '.join(chains_list) if chains_list else 'None'}")
-    print(f"  • Total Residues: {insp.get('total_residues', insp.get('num_residues', 0))}")
+    insp = inspect_structure_components(prot, workflow_mode="peptide", alphafold_metadata=af_meta)
+    print(f"  • Chains: {', '.join(insp.get('chain_ids', [])) if insp.get('chain_ids') else 'None'}")
+    print(f"  • Total Residues: {insp.get('total_residues', 0)}")
     print(f"  • Waters: {insp.get('waters_count', 0)}")
-    print(f"  • Metals: {', '.join(insp.get('metals_detected', [])) if insp.get('metals_detected') else 'None'}")
-    print(f"  • Cofactors: {', '.join(insp.get('cofactors_detected', [])) if insp.get('cofactors_detected') else 'None'}")
-    if insp.get("missing_residues_count", 0) > 0:
-        print(f"  • Missing Residues: {insp.get('missing_residues_count')} (REMARK 465)")
-    if insp.get("alternate_conformations_count", 0) > 0:
-        print(f"  • Alternate Conformations: {insp.get('alternate_conformations_count')} residues with altlocs (resolved to highest occupancy)")
+    print(f"  • Metals: {', '.join(insp.get('metals', [])) if insp.get('metals') else 'None'}")
+    print(f"  • Cofactors: {', '.join(insp.get('cofactors', [])) if insp.get('cofactors') else 'None'}")
 
-    res = prepare_receptor_for_lightdock(
+    launch_gui = not getattr(args, "no_gui", False)
+    decisions = review_structure_preparation(
+        pdb_path=prot,
+        inspection_data=insp,
+        launch_gui=launch_gui,
+        auto_confirm=not sys.stdin.isatty(),
+    )
+
+    res = prepare_receptor_transparently(
         input_pdb=prot,
         output_dir=args.output_dir,
-        chains=args.chains,
-        water_policy=args.water_policy,
-        keep_metals=args.keep_metals,
-        keep_cofactors=args.keep_cofactors,
-        biological_assembly=args.assembly,
+        workflow_mode="peptide",
+        decisions=decisions,
+        inspection_data=insp,
     )
     print(f"\nReceptor prepared successfully for LightDock!")
-    print(f"Saved to: {res['prepared_path']}")
+    print(f"Original PDB (unchanged): {res['original_path']}")
+    print(f"Saved Prepared PDB: {res['prepared_path']}")
+    print(f"Preparation Audit Report: {res['report_html']}")
 
 
 def _handle_peptide_prepare(args):
