@@ -8,6 +8,7 @@ from core.peptide_docking.input_validation import (
     validate_peptide_sequence,
     parse_fasta_file,
     validate_protein_pdb,
+    validate_peptide_structure,
     compute_sequence_checksum,
     compute_file_checksum,
     PeptideCandidate,
@@ -97,3 +98,34 @@ def test_validate_protein_pdb_real(tmp_path):
         assert len(val["chains"]) > 0
         assert val["num_residues"] > 0
         assert len(val["checksum"]) == 64
+
+
+def test_validate_peptide_structure(tmp_path):
+    # Test synthetic peptide PDB with standard ALA-CYS-ASP
+    p = tmp_path / "test_pep.pdb"
+    p.write_text(
+        "ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00           N\n"
+        "ATOM      2  CA  ALA A   1       1.458   0.000   0.000  1.00  0.00           C\n"
+        "ATOM      3  C   ALA A   1       2.000   1.200   0.000  1.00  0.00           C\n"
+        "ATOM      4  O   ALA A   1       1.500   2.200   0.000  1.00  0.00           O\n"
+        "ATOM      5  N   CYS A   2       3.200   1.100   0.000  1.00  0.00           N\n"
+        "ATOM      6  CA  CYS A   2       4.100   2.200   0.000  1.00  0.00           C\n"
+        "ATOM      7  C   CYS A   2       5.500   1.800   0.000  1.00  0.00           C\n"
+        "ATOM      8  O   CYS A   2       6.200   2.600   0.000  1.00  0.00           O\n"
+    )
+    cand = validate_peptide_structure(p)
+    assert cand.id == "test_pep"
+    assert cand.sequence == "AC"
+    assert cand.length == 2
+    assert cand.source == "structure"
+    assert cand.checksum != ""
+
+
+def test_validate_peptide_structure_real_chain_b():
+    pdb_path = Path("ligands/peptide_chainB.pdb")
+    if pdb_path.is_file():
+        cand = validate_peptide_structure(pdb_path)
+        assert cand.id == "peptide_chainB"
+        assert cand.length == 31
+        assert cand.sequence == "DIFCGETCAFIPCITHVPGTCSCKSKVCYFN"
+

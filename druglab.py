@@ -391,7 +391,12 @@ def _interactive_peptide_protein_prep():
 
 def _interactive_peptide_ligand_prep():
     """Interactive handler for Module 2: Peptide Ligand Preparation."""
-    from core.peptide_docking.input_validation import PeptideCandidate, validate_peptide_sequence, parse_fasta_file
+    from core.peptide_docking.input_validation import (
+        PeptideCandidate,
+        validate_peptide_sequence,
+        parse_fasta_file,
+        validate_peptide_structure,
+    )
     from core.peptide_docking.peptide_preparation import prepare_peptide_candidate
 
     print("\n--- Module 2: Peptide (Ligand) Preparation ---")
@@ -419,7 +424,7 @@ def _interactive_peptide_ligand_prep():
         try:
             s_path = input("Enter peptide PDB file path: ").strip()
             if os.path.isfile(s_path):
-                candidates = [PeptideCandidate(id="peptide_pdb", sequence="", source="structure", structure_path=s_path)]
+                candidates = [validate_peptide_structure(s_path)]
             else:
                 print(f"Error: Peptide PDB not found: {s_path}")
                 return

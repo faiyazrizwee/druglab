@@ -230,6 +230,7 @@ def parse_fasta_file(
 
 def validate_peptide_structure(
     structure_path: str | Path,
+    allow_nonstandard: bool = False,
 ) -> PeptideCandidate:
     """
     Validate a user-supplied peptide PDB structure and extract its sequence.
@@ -252,14 +253,32 @@ def validate_peptide_structure(
     for model in structure:
         for chain in model:
             for res in chain:
-                if res.id[0] == " " and Polypeptide.is_aa(res, standard=True):
+                if res.id[0] == " " and Polypeptide.is_aa(res, standard=not allow_nonstandard):
                     residues.append(res)
         break
 
     if not residues:
         raise ValueError(f"No standard amino acid residues found in peptide structure: {structure_path}")
 
-    sequence = "".join([Polypeptide.three_to_one(r.get_resname()) for r in residues])
+    def _resname_to_one(rname: str) -> str:
+        clean = rname.strip().upper()
+        if hasattr(Polypeptide, "protein_letters_3to1") and clean in Polypeptide.protein_letters_3to1:
+            return Polypeptide.protein_letters_3to1[clean]
+        if hasattr(Polypeptide, "three_to_one"):
+            try:
+                return Polypeptide.three_to_one(clean)
+            except Exception:
+                pass
+        try:
+            from Bio.SeqUtils import seq1
+            val = seq1(clean)
+            if val:
+                return val
+        except Exception:
+            pass
+        return "X"
+
+    sequence = "".join([_resname_to_one(r.get_resname()) for r in residues])
     checksum = compute_file_checksum(path)
     cid = path.stem
 
